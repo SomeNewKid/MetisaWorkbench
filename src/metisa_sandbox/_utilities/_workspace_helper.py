@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from fnmatch import fnmatchcase
+from functools import partial
 from pathlib import Path
 
 from .._sandbox_models import SandboxContainer
@@ -58,17 +59,30 @@ def copy_directories_into_staged(
     source_directory: Path,
     target_directory: Path,
     child_directories: list[str],
+    *,
+    workload_module: str | None = None,
 ) -> None:
     """Copy allowed directories and files into staged directory."""
     for child_directory in child_directories:
         from_dir = source_directory / child_directory
         to_dir = target_directory / child_directory
-        shutil.copytree(src=from_dir, dst=to_dir, ignore=_get_ignored_source_entries)
+
+        skills_directory = None
+        if child_directory == workload_module:
+            skills_directory = from_dir / "skills"
+
+        ignore = partial(
+            _get_ignored_source_entries,
+            skills_directory=skills_directory,
+        )
+        shutil.copytree(src=from_dir, dst=to_dir, ignore=ignore)
 
 
 def _get_ignored_source_entries(
     directory: str,
     entry_names: list[str],
+    *, 
+    skills_directory: Path | None = None,
 ) -> set[str]:
     ignored_entries: set[str] = set()
     directory_path = Path(directory)
@@ -81,6 +95,16 @@ def _get_ignored_source_entries(
             continue
 
         if entry_path.is_dir():
+            skill_file = directory_path / "SKILL.md"
+            if (
+                entry_name == "scripts"
+                and directory_path.parent == skills_directory
+                and directory_path.parent.name == "skills"
+                and "SKILL.md" in entry_names
+                and skill_file.is_file()
+                and not skill_file.is_symlink()
+            ):
+                continue
             patterns = _IGNORED_DIRECTORY_PATTERNS
         else:
             patterns = _IGNORED_FILE_PATTERNS

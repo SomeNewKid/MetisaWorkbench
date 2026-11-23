@@ -59,3 +59,29 @@ def test_code_execution(specification: MetisaSpecification):
                 print_success("Code execution result:", code_execution_result)
         except Exception as error:
             print_failure("Code execution error:", error)
+
+    with print_elapsed_time():
+        try:
+            code = dedent(
+                """
+                def main(value):
+                    if type(value) != "int":
+                        fail("value must be an integer")
+                    if value > 0:
+                        return "positive"
+                    elif value < 0:
+                        return "negative"
+                    return "zero"
+                """
+            )
+            tool_call_result = get_mcp_server_tool_result(
+                tool_name="execute_starlark_code",
+                params={"starlark_code": code, "script_parameters": {"value": 10}},
+            )
+            code_execution_result = tool_call_result.get("result", None)
+            if code_execution_result is None:
+                print_failure("Code execution returned no result.")
+            else:
+                print_success("Code execution result:", code_execution_result)
+        except Exception as error:
+            print_failure("Code execution error:", error)

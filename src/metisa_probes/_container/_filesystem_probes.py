@@ -113,19 +113,32 @@ def development_directories_are_absent(
     probe_context: ProbeContext,
 ) -> ProbeResult:
     """Verify the staged source contains no development directories."""
+    source_path = Path(probe_context.source_volume).absolute()
+    workload_directory = probe_context.workload_directory
+    skills_directory = None
+    if workload_directory is not None and workload_directory.parent == source_path:
+        skills_directory = workload_directory / "skills"
+
     directory_names = {
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
         "script",
-        "scripts",
         "tests",
     }
+
+    def _is_forbidden(path: Path) -> bool:
+        if not path.is_dir():
+            return False
+        if path.name == "scripts":
+            return path.parent.parent != skills_directory
+        return path.name in directory_names
+
     return _forbidden_source_entries_are_absent(
         probe_name="container__filesystem__development_directories_are_absent",
-        source_path=Path(probe_context.source_volume),
+        source_path=source_path,
         description="development directories",
-        is_forbidden=lambda path: path.is_dir() and path.name in directory_names,
+        is_forbidden=_is_forbidden,
     )
 
 

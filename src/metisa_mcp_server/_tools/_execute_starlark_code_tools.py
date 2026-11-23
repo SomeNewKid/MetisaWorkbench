@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from textwrap import dedent
 from typing import Annotated
 
 import requests
@@ -28,9 +29,9 @@ def execute_starlark_code(
     starlark_code: Annotated[
         str,
         Field(
-            description="""
+            description=dedent("""
                 The Starlark code to be executed, 
-                which must reside in a main() function with no parameters.
+                which must reside in a main() function with optional parameters.
                 For example:
                 
                 def main():
@@ -39,14 +40,26 @@ def execute_starlark_code(
                     for value in values:
                         total += value
                     return total / len(values)
-                """
+                """)
         ),
     ],
+    script_parameters: Annotated[
+        dict[str, object] | None,
+        Field(
+            description=dedent("""
+                The dictionary of parameters for the `main` function.
+                For example:
+                {"value": 10}
+
+                Omit for a no-argument function call.
+                """)
+        ),
+    ] = None,
 ) -> dict[str, object]:
     """Return the result of executing the provided Starlark code."""
-    _validate_arguments(starlark_code)
+    _validate_arguments(starlark_code, script_parameters)
 
-    result = _execute_tool(starlark_code)
+    result = _execute_tool(starlark_code, script_parameters)
 
     _validate_result(result)
 
@@ -55,6 +68,7 @@ def execute_starlark_code(
 
 def _validate_arguments(
     starlark_code: str,
+    script_parameters: dict[str, object] | None,
 ) -> None:
     if not starlark_code:
         raise ValueError("Starlark code must be provided.")
@@ -62,10 +76,14 @@ def _validate_arguments(
 
 def _execute_tool(
     starlark_code: str,
+    script_parameters: dict[str, object] | None,
 ) -> dict[str, object]:
     starlark_endpoint = "http://metisa-code-execution:8090/execute"
     headers = {"Accept": "application/json"}
-    payload = {"code": starlark_code}
+    payload = {
+        "code": starlark_code,
+        "parameters": script_parameters or {},
+    }
 
     trust_env = False  # Private-network requests must bypass the internet proxy.
 

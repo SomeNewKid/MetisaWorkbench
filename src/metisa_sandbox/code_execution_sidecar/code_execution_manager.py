@@ -27,7 +27,7 @@ from .._sandbox_models import (
     SandboxContext,
 )
 
-_IMAGE_FORMAT_VERSION = 1
+_IMAGE_FORMAT_VERSION = 2
 _CODE_EXECUTION_ALIAS = "metisa-code-execution"
 _CODE_EXECUTION_IMAGE_NAME = "metisa-code-execution"
 

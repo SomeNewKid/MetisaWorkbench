@@ -36,6 +36,7 @@ def create_staged_source_directory(
             _PROBES_MODULE_NAME,
             workload_module,
         ],
+        workload_module=workload_module,
     )
 
     if uses_metisa_harness:

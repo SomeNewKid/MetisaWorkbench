@@ -10,10 +10,11 @@ import (
 	"os"
 	"time"
 
+	starlarkjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
 )
 
-func execute(code string) (string, error) {
+func execute(code string, parameters json.RawMessage) (string, error) {
 	thread := &starlark.Thread{Name: "execute"}
 	thread.SetMaxExecutionSteps(100_000)
 
@@ -22,7 +23,12 @@ func execute(code string) (string, error) {
 	})
 	defer timer.Stop()
 
-	globals, err := starlark.ExecFile(thread, "agent.star", code, nil)
+	kwargs, err := decodeParameters(thread, parameters)
+	if err != nil {
+		return "", err
+	}
+	predeclared := starlark.StringDict{"json": starlarkjson.Module}
+	globals, err := starlark.ExecFile(thread, "agent.star", code, predeclared)
 	if err != nil {
 		return "", err
 	}
@@ -30,7 +36,7 @@ func execute(code string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("script must define main()")
 	}
-	value, err := starlark.Call(thread, main, nil, nil)
+	value, err := starlark.Call(thread, main, nil, kwargs)
 	if err != nil {
 		return "", err
 	}
@@ -40,10 +46,31 @@ func execute(code string) (string, error) {
 	return value.String(), nil
 }
 
+func decodeParameters(thread *starlark.Thread, parameters json.RawMessage) ([]starlark.Tuple, error) {
+	if len(parameters) == 0 {
+		return nil, nil
+	}
+	decoded, err := starlark.Call(
+		thread,
+		starlarkjson.Module.Members["decode"],
+		starlark.Tuple{starlark.String(string(parameters))},
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("invalid parameters: %w", err)
+	}
+	dict, ok := decoded.(*starlark.Dict)
+	if !ok {
+		return nil, fmt.Errorf("parameters must be a JSON object")
+	}
+	return dict.Items(), nil
+}
+
 func handleExecute(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var request struct {
-		Code string `json:"code"`
+		Code       string          `json:"code"`
+		Parameters json.RawMessage `json:"parameters"`
 	}
 
 	const maxBodyBytes = 512 * 1024
@@ -86,7 +113,7 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := execute(request.Code)
+	result, err := execute(request.Code, request.Parameters)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

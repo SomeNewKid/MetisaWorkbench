@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -110,6 +111,32 @@ def test_staged_source_excludes_nested_artifacts(
     result = probe(probe_context)
     assert not result.passed
     assert entry in result.message
+
+
+@pytest.mark.parametrize(
+    "relative_path,passed",
+    [
+        ("workload/skills/storage/scripts", True),
+        ("scripts", False),
+        ("workload/scripts", False),
+        ("workload/skills/scripts", False),
+        ("workload/skills/storage/nested/scripts", False),
+        ("other_package/skills/storage/scripts", False),
+    ],
+)
+def test_staged_scripts_require_workload_skill_path(
+    probe_context: ProbeContext, relative_path: str, passed: bool
+) -> None:
+    source = Path(probe_context.source_volume)
+    context = replace(probe_context, workload_directory=source / "workload")
+    scripts_directory = Path(relative_path)
+    (source / scripts_directory).mkdir(parents=True)
+
+    result = probes.development_directories_are_absent(context)
+
+    assert result.passed is passed, result.message
+    if not passed:
+        assert str(scripts_directory) in result.message
 
 
 @pytest.mark.parametrize(

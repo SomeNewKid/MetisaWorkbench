@@ -146,7 +146,7 @@ async def _run_agent(
 
     models = [
         "gpt-4o",  # online frontier model
-        "granite-4-1b",  # local small model
+        # "granite-4-1b",  # local small model
     ]
 
     if Capability.LLM_BROKER not in specification.capabilities:

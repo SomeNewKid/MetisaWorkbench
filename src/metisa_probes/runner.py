@@ -57,7 +57,9 @@ def main(
     specification = load_specification(specification_path)
 
     success = True
-    probe_context = ProbeContext(specification)
+    probe_context = ProbeContext(
+        specification, workload_directory=specification_path.absolute().parent
+    )
     log_path = _get_log_path(probe_context)
 
     probe_groups = (

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from metisa_common.specification_models import MetisaSpecification
 
@@ -17,6 +18,7 @@ class ProbeContext:
     output_volume: str = "/sandbox-output"
     source_volume: str = "/sandbox-source"
     work_dir: str = "/sandbox-work"
+    workload_directory: Path | None = None
 
 
 @dataclass(frozen=True)

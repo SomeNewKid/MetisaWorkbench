@@ -4,7 +4,6 @@ import asyncio
 import inspect
 import json
 from collections.abc import Callable
-from pathlib import Path
 from uuid import uuid4
 
 from jsonschema import validate
@@ -476,28 +475,29 @@ def _register_execute_skill_script_tool(
             }
 
         script_contents = script_location.read_text(encoding="utf-8")
-        script_result = _execute_script(
-            script_contents, script_location, script_parameters
-        )
+        script_result = await _execute_script(script_contents, script_parameters)
 
         return {"result": script_result}
 
-    def _execute_script(
+    async def _execute_script(
         script_contents: str,
-        script_location: Path,
         script_parameters: dict[str, object],
     ) -> str:
-        import json
-        from types import SimpleNamespace
+        from metisa_common.clients.mcp_client import get_mcp_server_tool_result
 
-        namespace: dict[str, object] = {"json": SimpleNamespace(encode=json.dumps)}
-        compiled_script = compile(script_contents, str(script_location), "exec")
-        exec(compiled_script, namespace)
+        tool_result = await asyncio.to_thread(
+            get_mcp_server_tool_result,
+            "execute_starlark_code",
+            params={
+                "starlark_code": script_contents,
+                "script_parameters": script_parameters,
+            },
+        )
 
-        main = namespace["main"]
-        if not callable(main):
-            raise RuntimeError("The script must define a callable main function.")
-        result = main(**script_parameters)
-        return str(result)
+        result = tool_result.get("result")
+        if not isinstance(result, str):
+            raise RuntimeError("Script result was not a string.")
+
+        return result
 
     return RegisteredTool(tool=tool, invoke=_invoke)

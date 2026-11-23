@@ -64,6 +64,10 @@ def test_main_aggregates_all_groups(
     assert runner.main([str(specification)]) == (1 if failure else 0)
     assert run_group.call_count == 22
     assert len({call.args[0].name for call in run_group.call_args_list}) == 22
+    assert all(
+        call.args[1].workload_directory == specification.parent
+        for call in run_group.call_args_list
+    )
 
 
 def test_log_directory_and_append(probe_context: ProbeContext) -> None:
