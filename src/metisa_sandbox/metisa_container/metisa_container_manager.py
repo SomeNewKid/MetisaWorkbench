@@ -1,0 +1,252 @@
+"""Provides utility methods for managing the Docker workload container."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from metisa_common.secrets_helper import SECRETS_DIRECTORY
+from metisa_common.specification_helper import resolve_environs, resolve_secrets
+from metisa_common.specification_models import Capability, MetisaSpecification
+from metisa_sandbox._docker._docker_container import create_docker_container
+
+from .._docker._docker_hardening import (
+    configure_http_proxy,
+    harden_docker_container,
+)
+from .._sandbox_models import (
+    ContainerCreationContext,
+    ContainerCreationResult,
+    SandboxContainer,
+    SandboxContext,
+)
+from .._utilities._secrets_helper import (
+    create_secrets_file,
+)
+from ._metisa_container_workspace import (
+    LANDLOCK_MODULE_NAME,
+    create_staged_source_directory,
+)
+
+_GUEST_SOURCE_DIR = "/sandbox-source"
+_GUEST_OUTPUT_DIR = "/sandbox-output"
+_GUEST_WORK_DIR = "/sandbox-work"
+_GUEST_PYTHON_VENV = "/opt/metisa-venv"
+
+
+def create_metisa_workload_definition() -> SandboxContainer:
+    """Return the definition of the Metisa workload container."""
+    return SandboxContainer(
+        "Metisa Workload",
+        "metisa_workload",
+        log_folder="metisa",
+        log_files=[],
+    )
+
+
+def create_metisa_workload_container(
+    specification: MetisaSpecification,
+    sandbox_context: SandboxContext,
+    container_creation_context: ContainerCreationContext,
+    *,
+    user_sid: str,
+    workload_tokens: dict[str, str],
+) -> ContainerCreationResult:
+    """Create the Metisa Workload container and connect it to the Docker network."""
+    creation_settings = container_creation_context.settings
+
+    image_reference = creation_settings.get("image_reference", "")
+    if not image_reference:
+        raise RuntimeError("Metisa Workload requires an image reference.")
+    if not isinstance(image_reference, str):
+        raise RuntimeError("Metisa Workload image reference must be a string.")
+
+    workload_module = creation_settings.get("workload_module", "")
+    if not workload_module:
+        raise RuntimeError("Metisa Workload requires a workload_module.")
+    if not isinstance(workload_module, str):
+        raise RuntimeError("Metisa Workload workload module must be a string.")
+
+    workload_args = creation_settings.get("workload_args", ())
+    if not isinstance(workload_args, tuple):
+        raise RuntimeError("Metisa Workload workload arguments must be a tuple.")
+    for arg in workload_args:
+        if not isinstance(arg, str):
+            raise RuntimeError("Metisa Workload workload arguments must be strings.")
+
+    is_network_required = creation_settings.get("is_network_required", None)
+    if is_network_required is None:
+        raise RuntimeError("Metisa Workload requires a network-required flag.")
+    if not isinstance(is_network_required, bool):
+        raise RuntimeError("Metisa Workload network-required flag must be a bool.")
+
+    is_interactive = Capability.INTERACTIVE in specification.capabilities
+
+    use_squid_proxy = creation_settings.get("use_squid_proxy", None)
+    if use_squid_proxy is not None and not isinstance(use_squid_proxy, bool):
+        raise RuntimeError("Metisa Workload squid-proxy flag must be a bool.")
+    if use_squid_proxy is None:
+        use_squid_proxy = False
+
+    uses_metisa_harness = Capability.METISA_HARNESS in specification.capabilities
+
+    staged_source_path = create_staged_source_directory(
+        sandbox_context,
+        workload_module,
+        uses_metisa_harness=uses_metisa_harness,
+    )
+
+    environs: list[str] = []
+
+    # Initialize the list of Docker run arguments.
+    arguments = [
+        "--name",
+        sandbox_context.workload_container_name,
+    ]
+
+    # Specify a seccomp (secure computing mode) profile for the container.
+    # The seccomp profile defines a set of system calls that the container
+    # is allowed to make (that is, it is a whitelist).
+    # This custom seccomp profile started as a copy of the default Docker
+    # seccomp profile from commit 6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef.
+    seccomp_path = Path(__file__).resolve().with_name("seccomp.json")
+
+    # Configure the network settings for the container
+    # based on whether a network is required.
+    if is_network_required:
+        arguments.extend(
+            [
+                "--network",
+                sandbox_context.workload_network_name,
+                "--network-alias",
+                "metisa-workload",
+            ]
+        )
+        squid_proxy_url = (
+            container_creation_context.squid_proxy_url if is_network_required else None
+        )
+        if use_squid_proxy and squid_proxy_url is not None:
+            configure_http_proxy(environs, squid_proxy_url)
+    else:
+        arguments.extend(
+            [
+                "--network",
+                "none",
+            ]
+        )
+
+    # Mount the necessary volumes.
+    arguments.extend(
+        [
+            "--volume",
+            f"{staged_source_path}:{_GUEST_SOURCE_DIR}:ro",
+            "--volume",
+            f"{sandbox_context.host_output_path}:{_GUEST_OUTPUT_DIR}:rw",
+        ]
+    )
+
+    # Mount temporary (in memory) filesystems.
+    arguments.extend(
+        [
+            "--tmpfs",
+            f"{_GUEST_WORK_DIR}:rw,size=1m,nosuid,nodev,noexec",
+            "--tmpfs",
+            "/tmp:rw,size=16m,nosuid,nodev,noexec",
+            "--tmpfs",
+            (
+                f"{SECRETS_DIRECTORY.as_posix()}:"
+                "rw,size=64k,nosuid,nodev,noexec,"
+                "uid=10001,gid=10001,mode=0700"
+            ),
+        ]
+    )
+
+    # Set environment variables for the container.
+    environs.extend(
+        [
+            f"SANDBOX_OUTPUT_DIR={_GUEST_OUTPUT_DIR}",
+            "METISA_RUNTIME_ROLE=landlock",
+        ]
+    )
+
+    # Set the working directory for the container.
+    arguments.extend(
+        [
+            "--workdir",
+            _GUEST_SOURCE_DIR,
+        ]
+    )
+
+    # Handle the secrets for the container
+    secrets = resolve_secrets(specification.secrets)
+
+    reserved_names = {
+        "METISA_MCP_SERVER_TOKEN",
+        "METISA_AGENT_MEMORY_TOKEN",
+    }
+    conflicting_names = reserved_names.intersection(secrets)
+    if conflicting_names:
+        names = ", ".join(sorted(conflicting_names))
+        raise ValueError(f"Workload secrets use reserved names: {names}")
+
+    secrets.update(workload_tokens)
+
+    secrets_file, secrets_key = create_secrets_file(staged_source_path, secrets)
+
+    if not secrets_file.is_file():
+        raise FileNotFoundError(f"Secrets file not created: {secrets_file}")
+
+    # Handle the environment variables
+    specified_environs = resolve_environs(specification.environs)
+    environs.extend(specified_environs)
+
+    environs.append(f"METISA_RUN_ID={sandbox_context.run_identifier}")
+    environs.append(f"METISA_USER_SID={user_sid}")
+
+    is_interactive_flag = "1" if is_interactive else "0"
+    environs.append(f"METISA_INTERACTIVE={is_interactive_flag}")
+
+    playwright_chromium = Capability.PLAYWRIGHT_CHROMIUM in specification.capabilities
+    playwright_chromium_flag = "1" if playwright_chromium else "0"
+    environs.append(f"METISA_PLAYWRIGHT_CHROMIUM={playwright_chromium_flag}")
+
+    # Harden the container
+    harden_docker_container(
+        arguments=arguments,
+        environs=environs,
+        username="sandbox",
+        memory="256m" if playwright_chromium else "128m",
+        interactive=is_interactive,
+        seccomp_path=seccomp_path,
+        number_user_processes=64,
+    )
+
+    # ---------------- The following switches must be last ----------------
+
+    # The image from which to construct the container.
+    arguments.extend(
+        [
+            image_reference,
+        ]
+    )
+
+    # The command to execute within the container.
+    arguments.extend(
+        [
+            f"{_GUEST_PYTHON_VENV}/bin/python",
+            "-I",  # Run the Python interpreter in isolated, no-bytecode mode
+            "-B",  # Don't write .pyc files on import
+            "-m",
+            LANDLOCK_MODULE_NAME,
+            workload_module,
+            *workload_args,
+        ]
+    )
+
+    create_docker_container(arguments)
+
+    return ContainerCreationResult(
+        sandbox_context.workload_container_name,
+        staged_source=staged_source_path,
+        secrets_file=secrets_file,
+        secrets_key=secrets_key,
+    )

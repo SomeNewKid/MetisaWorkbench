@@ -1,0 +1,104 @@
+"""Command-line interface for the application."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.sdk.trace import TracerProvider
+
+from metisa_common.specification_helper import (
+    load_specification,
+)
+from metisa_common.specification_models import (
+    Capability,
+    MetisaSpecification,
+)
+
+from ._telemetry import initialize_tracing
+from .test_suite.agent_memory import test_agent_memory
+from .test_suite.code_execution import test_code_execution
+from .test_suite.database import test_database_access
+from .test_suite.docling import test_docling
+from .test_suite.documents import test_documents
+from .test_suite.embeddings import test_embeddings
+from .test_suite.entity_guard import test_entity_guard
+from .test_suite.interactivity import test_interactivity
+from .test_suite.internet import test_internet_access
+from .test_suite.jina_reader import test_jina_reader
+from .test_suite.llm_broker import test_llm_broker
+from .test_suite.playwright_chromium import test_playwright_chromium
+from .test_suite.prompt_guard import test_prompt_guard
+from .test_suite.secrets import test_secrets
+from .test_suite.tracing import test_tracing
+
+_root_directory = Path(__file__).parent
+_metisa_json_path = _root_directory / "metisa.toml"
+if not _metisa_json_path.is_file():
+    raise FileNotFoundError("Test Agent missing a metisa.toml file.")
+_specification: MetisaSpecification = load_specification(_metisa_json_path)
+
+
+def main(
+    argv: list[str] | None = None,
+) -> int:
+    """Run the test agent workload."""
+    run_id = os.getenv("METISA_RUN_ID")
+    if not run_id:
+        raise RuntimeError("METISA_RUN_ID environment variable is not set.")
+
+    user_sid = os.getenv("METISA_USER_SID")
+    if not user_sid:
+        raise RuntimeError("METISA_USER_SID environment variable is not set.")
+
+    provider: TracerProvider | None = None
+
+    if Capability.OTEL_COLLECTOR in _specification.capabilities:
+        provider = initialize_tracing()
+
+    # OpenTelemetry supports instrumentation without an initialized SDK provider.
+    # Calls such as trace.get_tracer() and start_as_current_span()
+    # do not record or export spans until the provider is configured.
+    try:
+        tracer = trace.get_tracer("test_agent")
+
+        attributes = {
+            "run_id": run_id,
+            "user_sid": user_sid,
+        }
+
+        with tracer.start_as_current_span(
+            "test_agent.run",
+            attributes=attributes,
+            context=Context(),
+        ):
+            _run_tests(_specification)
+
+        return 0
+
+    finally:
+        if provider is not None:
+            provider.shutdown()
+
+
+def _run_tests(specification: MetisaSpecification) -> None:
+    test_tracing(specification)
+    test_interactivity(specification)
+    test_internet_access(specification)
+    test_jina_reader(specification)
+    test_database_access(specification)
+    test_prompt_guard(specification)
+    test_entity_guard(specification)
+    test_code_execution(specification)
+    test_llm_broker(specification)
+    test_documents(specification)
+    test_docling(specification)
+    test_embeddings(specification)
+    test_secrets(specification)
+    test_agent_memory(specification)
+    test_playwright_chromium(specification)
+
+    print()
+    print("-" * 30, flush=True)

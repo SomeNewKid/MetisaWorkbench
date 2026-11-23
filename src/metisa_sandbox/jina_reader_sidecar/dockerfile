@@ -1,0 +1,140 @@
+FROM ghcr.io/jina-ai/reader:oss
+
+# Switch to the root user to perform hardening operations.
+USER root
+
+# Enable Chrome diagnostics and allow 60 seconds for browser startup.
+RUN node -e "\
+    const fs = require('node:fs'); \
+    const path = '/app/build/services/puppeteer.js'; \
+    const source = fs.readFileSync(path, 'utf8'); \
+    const launchNeedle = 'puppeteer_1.default.launch({'; \
+    const timeoutNeedle = 'timeout: 10_000,'; \
+    if (source.split(launchNeedle).length !== 2) { \
+        throw new Error('Expected exactly one Puppeteer launch call'); \
+    } \
+    if (source.split(timeoutNeedle).length !== 2) { \
+        throw new Error('Expected exactly one ten-second timeout'); \
+    } \
+    const updated = source \
+        .replace(launchNeedle, launchNeedle + '\n            dumpio: true,') \
+        .replace(timeoutNeedle, 'timeout: 60_000,'); \
+    fs.writeFileSync(path, updated);"
+
+# Allow 120 seconds for Jina's service dependencies to initialize.
+RUN node -e "\
+    const fs = require('node:fs'); \
+    const path = '/app/node_modules/civkit/lib/async-service.js'; \
+    const source = fs.readFileSync(path, 'utf8'); \
+    const needle = 'dependencyReady(timeoutMilliseconds = 30000)'; \
+    if (source.split(needle).length !== 2) { \
+        throw new Error('Expected exactly one dependency-readiness default'); \
+    } \
+    const replacement = 'dependencyReady(timeoutMilliseconds = 120000)'; \
+    fs.writeFileSync(path, source.replace(needle, replacement));"
+
+# Document ports 8080 and 8081 as the ports on which Jina Reader exposes its endpoints.
+# This does not publish the ports to the host.
+EXPOSE 8080 8081
+
+# STOPSIGNAL: Ask Docker to send Jina Reader SIGTERM when stopping the container.
+# SIGTERM: request a hard stop for Jina Reader.
+# Note that SIGTERM is Docker's default stop signal, 
+# so this line is not really needed.
+STOPSIGNAL SIGTERM
+
+# Remove Ubuntu package-management commands and metadata.
+RUN rm -f \
+       /usr/bin/apt \
+       /usr/bin/apt-get \
+       /usr/bin/dpkg \
+       /usr/bin/dpkg-query \
+    && rm -rf \
+       /var/lib/apt \
+       /var/cache/apt \
+       /var/lib/dpkg \
+       /var/log/apt
+       
+# Remove restricted administrative, namespace, persistence,
+# remote-access, and desktop-automation commands.
+RUN set -eu; \
+    for command in \
+        # bash \
+        busctl \
+        dbus-send \
+        findmnt \
+        git \
+        gpg \
+        gpg-connect-agent \
+        gpgconf \
+        journalctl \
+        loginctl \
+        mount \
+        nice \
+        nohup \
+        nsenter \
+        perl \
+        renice \
+        scp \
+        sftp \
+        setsid \
+        ssh \
+        ssh-add \
+        su \
+        systemd-run \
+        systemctl \
+        umount \
+        unshare \
+        service \
+        gdbus \
+        qdbus \
+        wmctrl \
+        xdotool \
+    ; do \
+        for directory in \
+            /bin \
+            /sbin \
+            /usr/bin \
+            /usr/sbin \
+            /usr/local/bin \
+            /usr/local/sbin \
+        ; do \
+            rm -f "${directory}/${command}"; \
+        done; \
+    done
+
+HEALTHCHECK \
+    --start-period=120s \
+    --start-interval=10s \
+    --interval=30s \
+    --timeout=65s \
+    --retries=3 \
+    CMD node -e "\
+    (async () => { \
+        const response = await fetch('http://127.0.0.1:8081/', { \
+            method: 'POST', \
+            headers: { \
+                'Content-Type': 'application/x-www-form-urlencoded', \
+                'Accept': 'text/plain', \
+                'X-Respond-With': 'text', \
+                'X-Engine': 'browser', \
+                'X-No-Cache': 'true' \
+            }, \
+            body: 'url=https%3A%2F%2Fexample.com%2F', \
+            signal: AbortSignal.timeout(55000) \
+        }); \
+        if (!response.ok) { \
+            throw new Error('Jina returned HTTP ' + response.status); \
+        } \
+        const text = await response.text(); \
+        if (!text.includes('for use in documentation')) { \
+            throw new Error('Expected page content was not returned'); \
+        } \
+    })().then(() => process.exit(0)).catch(error => { \
+        console.error(error.message); \
+        process.exit(1); \
+    });"
+
+# Set the container's default runtime user to the 'jina' non-root user.
+# The 'jina' user is automatically created when installing the Jina Reader package.
+USER jina:jina

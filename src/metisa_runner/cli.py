@@ -1,0 +1,84 @@
+"""Command-line interface for the Metisa Runner module."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import NoReturn
+
+from metisa_common.specification_helper import get_workload_specification_path
+from metisa_common.terminal_helper import FAILURE_INDICATOR, terminal_status
+
+_PROBES_MODULE = "metisa_probes"
+
+
+def main(
+    argv: list[str] | None = None,
+) -> int:
+    """Run the Metisa probes module and then the workload module."""
+    args = sys.argv[1:] if argv is None else argv
+    if not args:
+        error_message = FAILURE_INDICATOR + "Error: no workload module argument."
+        print(error_message, file=sys.stderr)
+        return 1
+
+    workload_module = args[0]
+    workload_args = tuple(args[1:])
+    specification_path = get_workload_specification_path(workload_module)
+
+    with terminal_status(
+        running="Starting Metisa probes...",
+        success="Finished Metisa probes.",
+        failure="Could not complete Metisa probes.",
+    ) as status:
+        os.environ["METISA_RUNTIME_ROLE"] = "probes"
+        probes_exit_code = _run_probes_module(_PROBES_MODULE, specification_path)
+        if probes_exit_code != 0:
+            status.fail()
+            return probes_exit_code
+
+    os.environ["METISA_RUNTIME_ROLE"] = "workload"
+
+    try:
+        _execute_workload(workload_module, workload_args)
+    except OSError as error:
+        error_message = FAILURE_INDICATOR + f"Failed to execute workload: {error}"
+        print(error_message, file=sys.stderr)
+        return 1
+
+
+def _run_probes_module(
+    module_name: str,
+    specification_path: Path,
+) -> int:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",  # Run the Python interpreter in isolated mode
+            "-B",  # Don't write .pyc files on import
+            "-m",
+            module_name,
+            str(specification_path),
+        ],
+        check=False,
+    )
+
+    return result.returncode
+
+
+def _execute_workload(
+    module_name: str,
+    workload_args: tuple[str, ...],
+) -> NoReturn:
+    arguments = [
+        sys.executable,
+        "-I",  # Run the Python interpreter in isolated mode
+        "-B",  # Don't write .pyc files on import
+        "-m",
+        module_name,
+        *workload_args,
+    ]
+
+    os.execv(sys.executable, arguments)

@@ -1,0 +1,501 @@
+"""Validate a Metisa TOML specification."""
+
+from __future__ import annotations
+
+import re
+
+from .specification_models import (
+    AgentMemorySpecification,
+    Capability,
+    CodeExecutionSpecification,
+    DoclingSpecification,
+    DocumentsSpecification,
+    EmbeddingsSpecification,
+    HaproxySpecification,
+    JinaReaderSpecification,
+    LlmBrokerSpecification,
+    LlmServerSpecification,
+    McpServerSpecification,
+    MetisaSpecification,
+    OpenTelemetrySpecification,
+    PostgreSqlSpecification,
+    QdrantSpecification,
+    SpecificationValidationError,
+    SquidProxySpecification,
+)
+
+
+def validate_specification(
+    specification: MetisaSpecification,
+) -> None:
+    """Validate a Metisa TOML specification."""
+    _validate_squid_proxy_specification(
+        specification.capabilities,
+        specification.squid_proxy,
+    )
+
+    _validate_haproxy_specification(
+        specification.capabilities,
+        specification.haproxy,
+    )
+
+    _validate_interactive_specification(specification.capabilities)
+
+    _validate_mcp_server_specification(
+        specification.capabilities,
+        specification.mcp_server,
+    )
+
+    _validate_llm_server_specification(
+        specification.capabilities,
+        specification.llm_server,
+    )
+
+    _validate_llm_broker_specification(
+        specification.capabilities,
+        specification.llm_broker,
+    )
+
+    _validate_jina_reader_specification(
+        specification.capabilities,
+        specification.jina_reader,
+    )
+
+    _validate_code_execution_specification(
+        specification.capabilities,
+        specification.code_execution,
+    )
+
+    _validate_docling_specification(
+        specification.capabilities,
+        specification.docling,
+    )
+
+    _validate_documents_specification(
+        specification.capabilities,
+        specification.documents,
+    )
+
+    _validate_embeddings_specification(
+        specification.capabilities,
+        specification.embeddings,
+    )
+
+    _validate_qdrant_specification(
+        specification.capabilities,
+        specification.qdrant,
+    )
+
+    _validate_otel_collector_specification(
+        specification.capabilities,
+        specification.otel_collector,
+    )
+
+    _validate_postgres_specification(
+        specification.capabilities,
+        specification.postgres,
+    )
+
+    _validate_agent_memory_specification(
+        specification.capabilities,
+        specification.agent_memory,
+    )
+
+
+def is_valid_domain_name(
+    value: str,
+    suffix_domain_ok: bool = False,
+) -> bool:
+    """Determine whether value is a valid domain name."""
+    if not value:
+        return False
+    stripped_value = value.strip()
+    if len(stripped_value) != len(value):
+        return False
+    if value.startswith("."):
+        if not suffix_domain_ok:
+            return False
+        value = value[1:]
+    parts = value.split(".")
+    for part in parts:
+        if not _is_valid_domain_name_part(part):
+            return False
+    return True
+
+
+def is_valid_ip_address(
+    value: str,
+) -> bool:
+    """Determine whether value is a valid IPv4 or IPv6 address."""
+    return is_valid_ipv4_address(value) or is_valid_ipv6_address(value)
+
+
+def is_valid_ipv4_address(
+    value: str,
+) -> bool:
+    """Determine whether value is a valid IPv4 address."""
+    if not value:
+        return False
+    stripped_value = value.strip()
+    if len(stripped_value) != len(value):
+        return False
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    for part in parts:
+        if not _is_valid_ipv4_part(part):
+            return False
+    return True
+
+
+def is_valid_ipv6_address(
+    value: str,
+) -> bool:
+    """Determine whether value is a valid IPv6 address."""
+    if not value:
+        return False
+    stripped_value = value.strip()
+    if len(stripped_value) != len(value):
+        return False
+    if value == "::":
+        return True
+    if value[-1] == ":":
+        return False
+    parts = value.split(":")
+    last_part = parts[-1]
+    last_part_is_ipv4_address = is_valid_ipv4_address(last_part)
+    if last_part_is_ipv4_address:
+        parts = parts[0:-1]
+    number_of_parts = len(parts)
+    if last_part_is_ipv4_address:
+        if number_of_parts > 7:
+            return False
+    else:
+        if number_of_parts > 8:
+            return False
+    if ":::" in value:
+        return False
+    number_compression_markers = value.count("::")
+    if number_compression_markers > 1:  # compression markers
+        return False
+    required_parts = 6 if last_part_is_ipv4_address else 8
+    if (number_compression_markers == 0) and (number_of_parts != required_parts):
+        return False
+
+    for part in parts:
+        if not _is_valid_ipv6_part(part):
+            return False
+    last_part = parts[-1]
+    if not _is_valid_ipv6_part(last_part) and not last_part_is_ipv4_address:
+        return False
+
+    return True
+
+
+def _validate_squid_proxy_specification(
+    capabilities: frozenset[Capability],
+    squid_proxy_specification: SquidProxySpecification | None,
+):
+    if Capability.INTERNET in capabilities:
+        if Capability.NETWORK not in capabilities:
+            raise SpecificationValidationError(
+                '"internet" capability requires "network" capability.'
+            )
+
+    if squid_proxy_specification is None:
+        return
+
+    for value in squid_proxy_specification.allowed_domains:
+        if not is_valid_domain_name(value, suffix_domain_ok=True):
+            raise SpecificationValidationError(
+                f"[squid_proxy] table had invalid allowed domain: {value}"
+            )
+
+    for value in squid_proxy_specification.allowed_ip_addresses:
+        if not is_valid_ip_address(value):
+            raise SpecificationValidationError(
+                f"[squid_proxy] table had invalid allowed IP address: {value}"
+            )
+
+
+def _validate_haproxy_specification(
+    capabilities: frozenset[Capability],
+    haproxy_specification: HaproxySpecification | None,
+):
+    if Capability.LOCALNET in capabilities:
+        if Capability.NETWORK not in capabilities:
+            raise SpecificationValidationError(
+                '"localnet" capability requires "network" capability.'
+            )
+
+    if haproxy_specification is None:
+        return
+
+    listen_ports: list[int] = []
+    conflicted_ports: list[int] = []
+    for backend in haproxy_specification.backends:
+        listen_port = backend.listen_port
+        if listen_port in listen_ports:
+            if listen_port not in conflicted_ports:
+                conflicted_ports.append(listen_port)
+        else:
+            listen_ports.append(listen_port)
+
+    if conflicted_ports:
+        plural = "s" if len(conflicted_ports) > 1 else ""
+        csv = ", ".join(str(port) for port in conflicted_ports)
+        error = f"HAProxy backend conflict on port{plural}: {csv}"
+        raise SpecificationValidationError(error)
+
+
+def _validate_interactive_specification(
+    capabilities: frozenset[Capability],
+):
+    if Capability.INTERACTIVE in capabilities:
+        if Capability.MCP_SERVER not in capabilities:
+            raise SpecificationValidationError(
+                '"interactive" capability requires "mcp_server" capability.'
+            )
+
+
+def _validate_mcp_server_specification(
+    capabilities: frozenset[Capability],
+    mcp_server_specification: McpServerSpecification | None,
+):
+    if Capability.MCP_SERVER in capabilities:
+        if Capability.NETWORK not in capabilities:
+            raise SpecificationValidationError(
+                '"mcp_server" capability requires "network" capability.'
+            )
+        if Capability.PROMPT_GUARD not in capabilities:
+            raise SpecificationValidationError(
+                '"mcp_server" capability requires "prompt_guard" capability.'
+            )
+        if Capability.ENTITY_GUARD not in capabilities:
+            raise SpecificationValidationError(
+                '"mcp_server" capability requires "entity_guard" capability.'
+            )
+
+    if mcp_server_specification is None:
+        return
+    return
+
+
+def _validate_llm_broker_specification(
+    capabilities: frozenset[Capability],
+    llm_broker_specification: LlmBrokerSpecification | None,
+):
+    if Capability.LLM_BROKER in capabilities:
+        if Capability.NETWORK not in capabilities:
+            raise SpecificationValidationError(
+                '"llm_broker" capability requires "network" capability.'
+            )
+        if Capability.PROMPT_GUARD not in capabilities:
+            raise SpecificationValidationError(
+                '"llm_broker" capability requires "prompt_guard" capability.'
+            )
+        if Capability.ENTITY_GUARD not in capabilities:
+            raise SpecificationValidationError(
+                '"llm_broker" capability requires "entity_guard" capability.'
+            )
+
+    if llm_broker_specification is None:
+        return
+    return
+
+
+def _validate_llm_server_specification(
+    capabilities: frozenset[Capability],
+    llm_server_specification: LlmServerSpecification | None,
+):
+    if Capability.LLM_SERVER in capabilities:
+        if Capability.NETWORK not in capabilities:
+            raise SpecificationValidationError(
+                '"llm_server" capability requires "network" capability.'
+            )
+
+    if llm_server_specification is None:
+        return
+
+
+def _validate_jina_reader_specification(
+    capabilities: frozenset[Capability],
+    jina_reader_specification: JinaReaderSpecification | None,
+):
+    if Capability.JINA_READER in capabilities:
+        if Capability.INTERNET not in capabilities:
+            raise SpecificationValidationError(
+                '"jina_reader" capability requires "internet" capability.'
+            )
+        if Capability.MCP_SERVER not in capabilities:
+            raise SpecificationValidationError(
+                '"jina_reader" capability requires "mcp_server" capability.'
+            )
+
+    if jina_reader_specification is None:
+        return
+    return
+
+
+def _validate_code_execution_specification(
+    capabilities: frozenset[Capability],
+    code_execution_specification: CodeExecutionSpecification | None,
+):
+    if Capability.CODE_EXECUTION in capabilities:
+        if Capability.MCP_SERVER not in capabilities:
+            raise SpecificationValidationError(
+                '"code_execution" capability requires "mcp_server" capability.'
+            )
+
+    if code_execution_specification is None:
+        return
+    return
+
+
+def _validate_docling_specification(
+    capabilities: frozenset[Capability],
+    docling_specification: DoclingSpecification | None,
+):
+    if Capability.DOCLING in capabilities:
+        if Capability.MCP_SERVER not in capabilities:
+            raise SpecificationValidationError(
+                '"docling" capability requires "mcp_server" capability.'
+            )
+        if Capability.DOCUMENTS not in capabilities:
+            raise SpecificationValidationError(
+                '"docling" capability requires "documents" capability.'
+            )
+
+    if docling_specification is None:
+        return
+    return
+
+
+def _validate_documents_specification(
+    capabilities: frozenset[Capability],
+    documents_specification: DocumentsSpecification | None,
+):
+    if documents_specification is None:
+        return
+    return
+
+
+def _validate_embeddings_specification(
+    capabilities: frozenset[Capability],
+    embeddings_specification: EmbeddingsSpecification | None,
+):
+    if Capability.EMBEDDINGS in capabilities:
+        if Capability.DOCLING not in capabilities:
+            raise SpecificationValidationError(
+                '"embeddings" capability requires "docling" capability.'
+            )
+
+    if embeddings_specification is None:
+        return
+    return
+
+
+def _validate_qdrant_specification(
+    capabilities: frozenset[Capability],
+    qdrant_specification: QdrantSpecification | None,
+):
+    if qdrant_specification is None:
+        return
+    return
+
+
+def _validate_otel_collector_specification(
+    capabilities: frozenset[Capability],
+    otel_collector_specification: OpenTelemetrySpecification | None,
+):
+    if otel_collector_specification is None:
+        return
+    return
+
+
+def _validate_postgres_specification(
+    capabilities: frozenset[Capability],
+    postgres_specification: PostgreSqlSpecification | None,
+):
+    if postgres_specification is None:
+        return
+    return
+
+
+def _validate_agent_memory_specification(
+    capabilities: frozenset[Capability],
+    agent_memory_specification: AgentMemorySpecification | None,
+):
+    if Capability.AGENT_MEMORY in capabilities:
+        if Capability.POSTGRES not in capabilities:
+            raise SpecificationValidationError(
+                '"agent_memory" capability requires "postgres" capability.'
+            )
+
+    if agent_memory_specification is None:
+        return
+    return
+
+
+def _is_valid_domain_name_part(
+    part: str,
+) -> bool:
+    stripped_part = part.strip()
+    if len(stripped_part) != len(part):
+        return False
+    length_of_part = len(part)
+    if (length_of_part < 1) or (length_of_part > 63):
+        return False
+    if length_of_part == 1:
+        pattern = "^[a-zA-Z]$"  # must be a letter
+    elif length_of_part == 2:
+        pattern = (
+            "^[a-zA-Z]"  # start with a letter
+            "[a-zA-Z0-9]$"  # end with a letter or digit
+        )
+    else:
+        pattern = (
+            "^[a-zA-Z]"  # start with a letter
+            "[a-zA-Z0-9-]+"  # letters, digits, hypens
+            "[a-zA-Z0-9]$"  # end with a letter or digit
+        )
+    return bool(re.match(pattern, part))
+
+
+def _is_valid_ipv4_part(
+    part: str,
+) -> bool:
+    stripped_part = part.strip()
+    if len(stripped_part) != len(part):
+        return False
+    length_of_part = len(part)
+    if (length_of_part < 1) or (length_of_part > 3):
+        return False
+    if part.startswith("0") and (length_of_part > 1):
+        return False
+    pattern = "^[0-9]+$"
+    if not bool(re.match(pattern, part)):
+        return False
+    value: int | None = None
+    try:
+        value = int(part)
+    except ValueError:
+        return False
+    return (value >= 0) and (value <= 255)
+
+
+def _is_valid_ipv6_part(
+    part: str,
+) -> bool:
+    stripped_part = part.strip()
+    if len(stripped_part) != len(part):
+        return False
+    if len(part) == 0:
+        return True
+    length_of_part = len(part)
+    if length_of_part > 4:
+        return False
+    pattern = "^[0-9a-fA-F]+$"
+    if not bool(re.match(pattern, part)):
+        return False
+    return True
