@@ -223,3 +223,6 @@ __marimo__/
 # Metisa
 .docs/
 .runs/
+/src/metisa_sandbox/http_server_sidecar/publish/
+/src/metisa_sandbox/http_server_sidecar/WebApp/bin/
+/src/metisa_sandbox/http_server_sidecar/WebApp/obj/

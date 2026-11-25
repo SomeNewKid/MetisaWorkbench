@@ -12,12 +12,14 @@ from .specification_models import (
     DocumentsSpecification,
     EmbeddingsSpecification,
     HaproxySpecification,
+    HttpServerSpecification,
     JinaReaderSpecification,
     LlmBrokerSpecification,
     LlmServerSpecification,
     McpServerSpecification,
     MetisaSpecification,
     OpenTelemetrySpecification,
+    PlaywrightChromiumSpecification,
     PostgreSqlSpecification,
     QdrantSpecification,
     SpecificationValidationError,
@@ -99,6 +101,16 @@ def validate_specification(
     _validate_agent_memory_specification(
         specification.capabilities,
         specification.agent_memory,
+    )
+
+    _validate_playwright_chromium_specification(
+        specification.capabilities,
+        specification.playwright_chromium,
+    )
+
+    _validate_http_server_specification(
+        specification.capabilities,
+        specification.http_server,
     )
 
 
@@ -433,6 +445,36 @@ def _validate_agent_memory_specification(
             )
 
     if agent_memory_specification is None:
+        return
+    return
+
+
+def _validate_playwright_chromium_specification(
+    capabilities: frozenset[Capability],
+    playwright_chromium_specification: PlaywrightChromiumSpecification | None,
+):
+    if Capability.PLAYWRIGHT_CHROMIUM in capabilities:
+        if Capability.NETWORK not in capabilities:
+            raise SpecificationValidationError(
+                '"playwright_chromium" capability requires "network" capability.'
+            )
+
+    if playwright_chromium_specification is None:
+        return
+    return
+
+
+def _validate_http_server_specification(
+    capabilities: frozenset[Capability],
+    http_server_specification: HttpServerSpecification | None,
+):
+    if Capability.HTTP_SERVER in capabilities:
+        if Capability.NETWORK not in capabilities:
+            raise SpecificationValidationError(
+                '"http_server" capability requires "network" capability.'
+            )
+
+    if http_server_specification is None:
         return
     return
 

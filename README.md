@@ -6,7 +6,7 @@ work and how to isolate their workloads.
 - **Metisa Harness** runs the model and tool loop for an agent. Following the
   division of responsibilities in the OpenAI Agents SDK, `AgentDefinition`
   describes the model, instructions, tools, and skills, and `AgentHarness`
-  executes the run. Start with the [Windows harness sample](#run-the-harness-sample-on-windows).
+  executes the run. Start with the [harness sample](#run-the-harness-sample).
 - **Metisa Sandbox** runs Python workloads in temporary, hardened Linux
   containers. It reads the workload's `metisa.toml`, builds or reuses Docker
   images, provisions services, checks the sandbox restrictions, and cleans up
@@ -14,11 +14,9 @@ work and how to isolate their workloads.
   networking, isolation, and Linux hardening easier to study. Start with
   [the sandbox test agent](#run-the-sandbox-test-agent).
 
-Both components use `metisa_common` for shared helpers. In this checkout,
-`sample_agent` runs on the Windows host with local Ollama and OpenAI clients,
-and `test_agent` runs under Docker to exercise the sandbox services. Running
-the harness sample inside the sandbox would require porting its Windows-specific
-entry point and making the harness package available in the container.
+Both components use `metisa_common` for shared helpers. The `sample_agent`
+workload runs the harness inside the sandbox and sends model requests through
+the LLM broker. The `test_agent` workload exercises the sandbox services.
 
 > [!WARNING]
 > The sandbox is experimental. Its controls and runtime probes support learning
@@ -26,12 +24,10 @@ entry point and making the harness package available in the container.
 
 ## Requirements
 
-- **Windows and PowerShell.** The harness sample uses Windows user identity
-  APIs. The sandbox host CLI uses Windows-specific terminal, identity, and
-  Docker Desktop integration.
+- **Windows and PowerShell.** The sandbox host CLI uses Windows-specific
+  terminal, identity, and Docker Desktop integration. Workloads run in Linux
+  containers.
 - **Python 3.11 or later.** The Python container images use Python 3.12.
-- **For the harness sample**, run Ollama on its default local port (`11434`)
-  with `granite4.1:3b`, and set `OPENAI_API_KEY` for `gpt-4o`.
 - **For sandbox runs**, use Docker Desktop in Linux container mode with
   `docker` on `PATH`, BuildKit support for named build contexts and build
   mounts, and a container kernel that supports Landlock. The workload
@@ -70,40 +66,64 @@ the manual commands above on another machine, or adjust the script's
 Keep the checkout available and run the examples from the repository root.
 Sandbox provisioning reads source files and Dockerfiles from the checkout.
 
-## Run the harness sample on Windows
+## Run the harness sample
 
-With Ollama running and `OPENAI_API_KEY` set in the current PowerShell session,
-run the [sample agent](src/sample_agent) directly.
+Review the [sample specification](src/sample_agent/metisa.toml) before
+launching the workload from the repository root.
+
+1. Set `local_models_directory` to your model directory. It must contain the
+   [Prompt Guard model files](#run-the-sandbox-test-agent) and the GGUF file
+   declared under `[llm_server].models`, at
+   `<local_models_directory>/<repo>/<revision>/<filename>`. The checked-in
+   configuration starts the local `granite-4-1b` server even though the sample
+   CLI selects `gpt-4o` through the broker.
+2. Set `OPENAI_API_KEY` in the PowerShell session that launches the sandbox.
+   The broker uses it for `gpt-4o`. Set the diagnostic environment value shown
+   below so the pre-workload probe passes.
+3. Set `SANDBOX_TESTER_MARIADB_CREDENTIALS` in `username,password` format if
+   you plan to use the database tool. Using that tool also requires the
+   `localnet` capability and a reachable MariaDB backend. For the examples
+   below, you can remove the database tool and its secret reference from
+   `[mcp_server]`.
 
 ```powershell
-ollama pull granite4.1:3b
-.\.venv\Scripts\python.exe -m sample_agent "What is the time?"
+$env:METISA_PROBE_2 = "Retrieved from host's environment variables"
+.\.venv\Scripts\python.exe -m metisa_sandbox sample_agent "What is the time?"
 ```
 
-The CLI uses the same prompt with `gpt-4o` and `granite4.1:3b`. Try
-`Look up product code "chair".` to exercise the product tool and its guardrails,
-or `How many company values do we have?` to query example handbook excerpts
-through the sample's in-memory MCP server. The `[mcp_server]` table in
-[the sample specification](src/sample_agent/metisa.toml) configures the sandbox
-MCP sidecar. With `otel_collector` enabled, the Windows CLI writes traces to
-`.runs/<run-id>/.logs/telemetry/traces.json`.
+The sandbox supplies `METISA_RUN_ID` and `METISA_USER_SID` to the sample.
+With the sample's `interactive` capability enabled, omitting the prompt opens
+a screened terminal prompt. With `interactive` disabled, the sample defaults
+to `Issue a refund for $75.40.`. The refund guardrail requires interactive
+approval for that amount.
+
+Try `Look up product code "chair".` to exercise the product tool and its
+guardrails, or `How many company values do we have?` to query example handbook
+excerpts through the sample's in-memory MCP server. The sample also connects to
+the sandbox MCP sidecar when `mcp_server` is enabled. If you enable
+`otel_collector`, the collector writes traces to
+`.runs/<run-id>/.logs/telemetry/traces.jsonl`.
 
 Try these prompts with the [robot inspection skills](src/sample_agent/skills).
 
 ```powershell
-.\.venv\Scripts\python.exe -m sample_agent "Can the robot named Bolt enter the race?"
-.\.venv\Scripts\python.exe -m sample_agent "Can the robot named Alice be placed in storage?"
+.\.venv\Scripts\python.exe -m metisa_sandbox sample_agent "Can the robot named Bolt enter the race?"
+.\.venv\Scripts\python.exe -m metisa_sandbox sample_agent "Can the robot named Alice be placed in storage?"
 ```
 
 Both skills use the battery and motor-temperature tools. The race skill loads
 a reference with the race limits. The storage skill loads a checklist and, if
 both measurements pass, runs `storage_available.star` to check for a bay.
 The sample data gives Bolt passing race measurements and Alice passing storage
-measurements with a bay available. The Alice question is the default if you
-omit the prompt. To print lifecycle events for the skill, document, and script
+measurements with a bay available. To print lifecycle events for model and tool
 calls, set `_PRINT_LIFECYCLE_EVENTS` in [the sample CLI](src/sample_agent/cli.py).
 
 ## Use the harness from Python
+
+This example uses the default model client. Run it in a sandbox workload with
+`metisa_harness` enabled and an LLM broker configured to serve `gpt-4o`. The
+client sends Chat Completions requests to `http://metisa-llm-broker:8000/v1`.
+Pass `llm=` to `AgentHarness.run()` to supply a model client directly.
 
 ```python
 import asyncio
@@ -130,15 +150,12 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-The default model resolver queries Ollama first, even for the OpenAI aliases
-`gpt4o` and `gpt-4o`. An unreachable Ollama server stops model resolution.
-Pass `llm=` to `AgentHarness.run()` to supply a model client directly.
-
 ### How a harness run works
 
 1. The harness registers synchronous or asynchronous Python tools, discovers
    tools from connected MCP clients, and exposes `sub_agents` as tools. A
    sub-agent tool starts a child run and returns its final output to the parent.
+   Sub-agents can run their own tools and cannot delegate to further sub-agents.
    A skills directory adds tools for loading skills and their supporting files.
 2. The model receives the instructions, available tools, and conversation. By
    default each model call receives the run's full conversation history.
@@ -147,8 +164,10 @@ Pass `llm=` to `AgentHarness.run()` to supply a model client directly.
    results to the model on its next turn.
 4. `RunResult` contains the final output and conversation history. Set
    `output_type` on the definition to a Pydantic model for validated structured
-   output. The run raises an error if it reaches `max_turns` without a final
-   answer. The default limit is 10 turns.
+   output. The adapter puts the JSON schema in the model instructions, and the
+   harness parses and validates the final answer. The default limit is 10 model
+   calls. If the last call requests tools, the harness dispatches them before
+   raising the turn-limit error.
 
 Add local functions through `tools`. Use type hints and attach a JSON output
 schema with `metisa_common.mcp_helper.with_output_schema`. Open MCP clients in
@@ -177,10 +196,10 @@ supporting files as needed.
 | `execute_skill_script` | `skill_name`, `script_path`, `script_parameters` | The script return value as a string in `result`. |
 
 The storage example passes `scripts/storage_available.star` and
-`{"robot_name": "Alice"}` to the script tool. The local harness runs the file
-with Python `exec()` and calls `main` with the named arguments. Use this runner
-with trusted, Python-compatible scripts. The sandbox provides a separate
-Starlark service through its `code_execution` capability.
+`{"robot_name": "Alice"}` to the script tool. The harness reads the file from
+the skill directory and sends its contents and parameters to the sandbox MCP
+tool `execute_starlark_code`. To use skill scripts, enable `mcp_server` and
+`code_execution` and include `execute_starlark_code` in `[mcp_server].tools`.
 
 ## Run a sandbox workload
 
@@ -297,8 +316,10 @@ references for credentials rather than committing credential values in TOML.
 | `prompt_guard` | Provides prompt injection checks and text moderation. Started alongside MCP or the LLM broker. |
 | `entity_guard` | Provides entity detection and anonymization. Started alongside MCP or the LLM broker. |
 | `jina_reader` | Provides web content extraction through Jina Reader. Requires `internet` and `mcp_server`. |
-| `playwright_chromium` | Starts a headless Chromium sidecar and permits the workload's bundled Playwright driver. Requires `network` and a compatible Playwright dependency in the workload. Add `internet` and a Squid allowlist for public websites. |
+| `playwright_chromium` | Starts a headless Chromium sidecar and permits the workload's bundled Playwright driver. Requires `network` and a compatible Playwright dependency in the workload. Use with `http_server` for browser tests of a local site. |
+| `http_server` | Serves an ASP.NET Core 8 application on the internal workload network. Requires `network`. |
 | `code_execution` | Provides Starlark execution in a separate Go service. Requires `mcp_server`. |
+| `metisa_harness` | Stages the `metisa_harness` Python package in the workload container. Configure `llm_broker` when using the default model client. |
 | `llm_server` | Runs a llama.cpp container for each model in `[llm_server].models`. Requires `network`; use with the broker for workload access. |
 | `llm_broker` | Routes requests to configured local model aliases and online OpenAI models. Requires `network`, `prompt_guard`, and `entity_guard`. |
 | `documents` | Serves files staged from `[documents].local_directory` through Nginx. |
@@ -374,22 +395,31 @@ normal Playwright page API to navigate, click, and capture screenshots.
 `[playwright_chromium].environs` can supply environment variables to the
 sidecar, such as `DEBUG=pw:browser` for browser diagnostics.
 
-Add `internet` and allow the desired domains or IP addresses in `[squid_proxy]`
-to navigate to public websites. Browser requests originate in the sidecar and
-use Squid. The sample's
-[browser test](src/test_agent/test_suite/playwright_chromium.py) renders an
-inline page when `internet` is absent and visits `https://example.com/` when it
-is enabled. The test agent allowlist includes `.example.com`.
+The [browser test](src/test_agent/test_suite/playwright_chromium.py) opens the
+HTTP Server when `http_server` is enabled and renders an inline page otherwise.
+Use the configured MCP Server tools to fetch public web content for Prompt
+Guard screening.
+
+### HTTP Server
+
+Declare `http_server` alongside `network` in the workload's `metisa.toml`.
+The sidecar serves an ASP.NET Core 8 application at
+`http://metisa-http-server:8080`. The workload can make HTTP requests to this
+URL directly or open it in remote Chromium when `playwright_chromium` is enabled.
+Use `[http_server].environs` to set environment variables for the web application.
+
+The [sidecar Dockerfile](src/metisa_sandbox/http_server_sidecar/dockerfile)
+copies the published application from `publish/` in its build context into
+`/app`. It starts `WebApp.dll` and checks `/hello` for readiness.
 
 ## Run the sandbox test agent
 
 [`test_agent`](src/test_agent) exercises the sandbox services, including
 network access, database queries, text guards, model requests, documents,
 retrieval, interactive input, agent memory, secrets, tracing, and remote browser
-automation. The checked-in configuration enables public-site browser automation
-and the service integrations below. It leaves interactive input disabled. The
-browser exercise saves `chromium.png` in the run output directory. If you enable
-interactive input, its exercise writes `answer.txt` there as well.
+automation. The checked-in configuration enables the HTTP Server and Playwright
+Chromium. The browser exercise saves `chromium.png` in the run output directory.
+If you enable interactive input, its exercise writes `answer.txt` there as well.
 
 1. Review [its TOML file](src/test_agent/metisa.toml), especially the enabled
    capabilities, local paths, allowed destinations, and credentials.
@@ -448,6 +478,7 @@ The configured services communicate through these networks:
 Workload container
     └─ internal workload network
        ├─ Playwright Chromium
+       ├─ HTTP Server
        └─ MCP, LLM broker, agent memory, and telemetry
 
 Internal backend network ─ supporting services and proxies
@@ -461,13 +492,11 @@ backend network. Squid handles permitted internet access, and HAProxy handles
 configured local network routes. Services use Docker network aliases on
 unpublished ports.
 
-The browser sidecar joins the workload network and also joins the backend
-network when one is created. In a run with `internet` and `llm_broker`, the
-workload connects to the browser on the workload network, and the browser
-reaches Squid through the backend network. This preserves the broker
-configuration's restriction on direct Squid access from the workload.
-Metisa waits for the browser sidecar's WebSocket health check before starting
-the workload. See [the network diagram](network.txt) for the full topology.
+Playwright Chromium and the HTTP Server join the internal workload network.
+The workload connects to the browser over WebSocket, and Chromium sends page
+requests to the HTTP Server over that same network. Metisa waits for both
+configured sidecars to pass their health checks before starting the workload.
+See [the network diagram](network.txt) for the full topology.
 
 Inside the workload container, startup follows this sequence:
 
@@ -500,6 +529,8 @@ The implementation combines several controls:
   hardware access.
 - Runtime probes covering container identity, filesystem and network access,
   Linux capabilities, resource limits, seccomp, Landlock, and Python behavior.
+  The Chromium network probe checks that the browser cannot navigate to
+  `http://example.com` and uses the HTTP Server as a local control when enabled.
 - Encrypted staged secrets, with decryption keys delivered separately through
   stdin to a provisioning process and stored in a restricted tmpfs directory.
 - MCP and agent memory authentication using separate, one-hour bearer tokens
@@ -576,6 +607,7 @@ sandbox. The test agent provides additional service integration exercises.
 | `src/metisa_harness/` | Agent definitions, run loop, model adapter, tool dispatch, skills, guardrails, and lifecycle events. |
 | `src/metisa_sandbox/` | Host CLI, Docker helpers, lifecycle management, Dockerfiles, and sidecar provisioning. |
 | `src/metisa_sandbox/playwright_chromium_sidecar/` | Browser image, Playwright WebSocket server and health check, and Chromium seccomp profile. |
+| `src/metisa_sandbox/http_server_sidecar/` | ASP.NET Core runtime image, HTTP health check, and HTTP Server provisioning. |
 | `src/metisa_common/` | Shared specification, tool schema, terminal, secrets, screening, and client utilities. |
 | `src/metisa_landlock/` | Linux filesystem restrictions and workload bootstrap. |
 | `src/metisa_runner/` | Probe execution and handoff to the workload. |
@@ -585,7 +617,7 @@ sandbox. The test agent provides additional service integration exercises.
 | `src/metisa_agent_memory/` | Authenticated, user-scoped episode and memory storage, sanitization, and screening. |
 | `src/metisa_prompt_guard/`, `src/metisa_entity_guard/` | Text classification, moderation, and anonymization services. |
 | `src/metisa_docling/`, `src/metisa_embeddings/` | Document conversion, indexing, and retrieval services. |
-| `src/sample_agent/` | Windows harness sample with example tools, robot inspection skills, guardrails, and an in-memory MCP server. |
+| `src/sample_agent/` | Sandbox-hosted harness sample with example tools, robot inspection skills, guardrails, and an in-memory MCP server. |
 | `src/test_agent/` | Sandbox integration workload, TOML configuration, and service exercises. |
 | `tests/` | Unit tests. |
 | `scripts/` | PowerShell setup and development checks. |
@@ -598,8 +630,8 @@ configuration explicit so the implementation remains useful for learning.
 
 | Symptom | What to check |
 | --- | --- |
-| Harness reports `Ollama discovery failed` | Start Ollama and check that the sample can reach it at `localhost:11434`. Discovery also runs for OpenAI aliases. |
-| A harness sample model fails to run | Check that `granite4.1:3b` is installed in Ollama and that `OPENAI_API_KEY` is set for `gpt-4o`. |
+| Sample reports a missing `METISA_RUN_ID` or `METISA_USER_SID` | Launch `sample_agent` through `metisa_sandbox` so the sandbox supplies both values. |
+| A harness sample model fails to run | Check the alias in `[llm_broker]` and inspect the broker logs. For `gpt-4o`, verify the host's `OPENAI_API_KEY` and the Squid allowlist. For a configured local alias, verify the GGUF path and inspect the model sidecar logs. |
 | Docker command unavailable or Engine unreachable | Check `docker info`, Docker Desktop installation, Linux container mode, and `PATH`. |
 | Workload package or specification not found | Run from the repository root with the project's virtual environment; check `src/<package>/metisa.toml`. |
 | Invalid specification | Check capability prerequisites, table names, dependency syntax, and environment declarations. |
@@ -610,7 +642,8 @@ configuration explicit so the implementation remains useful for learning.
 | Bootstrap or probes fail | Inspect `.runs/<run>/.logs`, kernel support, and the specific failed restriction or service check. |
 | Playwright fails inside `sync_playwright()` | Check `.logs/metisa/stderr.txt` and `state.json` for a driver spawn denial or `OOMKilled`. If the guard changed, ensure the affected workload image was rebuilt. |
 | Playwright cannot connect to Chromium | Check `.logs/playwright-chromium/state.json` for the WebSocket health check result, then verify the browser alias, port, and matching Playwright versions. |
-| Chromium reports `ERR_PROXY_CONNECTION_FAILED` | Check the sidecar and Squid network attachments. With `llm_broker` enabled, they must share the backend network. Check `.logs/squid-proxy/stdout.txt` for the browser's `CONNECT` request. |
+| Chromium cannot load the local website | Check that `http_server` is enabled and Chromium is navigating to `http://metisa-http-server:8080`. |
+| HTTP Server fails to start | Check `.logs/http-server/state.json` for the exit code and health-check output. Verify that the published files include `WebApp.dll` and that the app serves `/hello` on port `8080`. |
 | A service is slow or exits unexpectedly | Inspect its logs and Docker resource allocation; models have different memory and startup requirements. |
 | PostgreSQL container name conflict | Check whether another run is using `metisa-postgres-agent-memory`; runs using PostgreSQL must execute sequentially. |
 | Agent memory cannot connect to PostgreSQL | Check `METISA_POSTGRES_PASSWORD` against the password used to initialize the retained volume, plus the database and agent memory logs. |

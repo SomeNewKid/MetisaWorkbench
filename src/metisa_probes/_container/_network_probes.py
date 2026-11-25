@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import ipaddress
 import os
+import re
 import socket
 import ssl
 import urllib.error
@@ -14,6 +16,7 @@ from pathlib import Path
 from metisa_common.specification_models import Capability
 
 from .._probe_models import ProbeContext, ProbeGroup, ProbeResult
+from .._python._probe_helpers import permit_process_spawn
 
 _WORKLOAD_NETWORK_ALIAS = "metisa-workload"
 _DOCKER_DNS_RESOLVER = "127.0.0.11"
@@ -21,6 +24,20 @@ _HAPROXY_NETWORK_ALIAS = "metisa-haproxy"
 _HAPROXY_HEALTH_PORT = 8404
 _OTEL_COLLECTOR_NETWORK_ALIAS = "metisa-otel-collector"
 _OTEL_COLLECTOR_HTTP_PORT = 4318
+_PLAYWRIGHT_CHROMIUM_ENDPOINT = "ws://metisa-playwright-chromium:3000/metisa-browser"
+_HTTP_SERVER_URL = "http://metisa-http-server:8080/hello"
+_CHROMIUM_NAVIGATION_TIMEOUT_MS = 10_000
+_CHROMIUM_NETWORK_ERRORS = frozenset(
+    {
+        "ERR_ADDRESS_UNREACHABLE",
+        "ERR_CONNECTION_REFUSED",
+        "ERR_CONNECTION_TIMED_OUT",
+        "ERR_INTERNET_DISCONNECTED",
+        "ERR_NAME_NOT_RESOLVED",
+        "ERR_NETWORK_ACCESS_DENIED",
+        "ERR_TIMED_OUT",
+    }
+)
 _TCP_TIMEOUT_SECONDS = 3
 _PROXY_ENVIRONMENT_VARIABLES = frozenset(
     {
@@ -286,6 +303,27 @@ def external_http_is_blocked(
         f"External HTTP request reached {target_url} and returned HTTP {status_code}."
     )
     return ProbeResult.failure(probe_name, message)
+
+
+def chromium_external_http_is_blocked(probe_context: ProbeContext) -> ProbeResult:
+    """Ensure remote Chromium cannot navigate to a public HTTP website."""
+    probe_name = "container__network__chromium_external_http_is_blocked"
+    capabilities = probe_context.specification.capabilities
+    if Capability.PLAYWRIGHT_CHROMIUM not in capabilities:
+        message = "Playwright Chromium is disabled. Skipping probe."
+        return ProbeResult.success(probe_name, message)
+
+    try:
+        return asyncio.run(
+            _check_chromium_external_http(
+                probe_name, check_http_server=Capability.HTTP_SERVER in capabilities
+            )
+        )
+    except Exception as error:
+        message = (
+            f"Could not verify Chromium network access: {type(error).__name__}: {error}"
+        )
+        return ProbeResult.failure(probe_name, message)
 
 
 def external_http_is_allowed(
@@ -987,6 +1025,69 @@ def workload_has_no_default_route(probe_context: ProbeContext) -> ProbeResult:
     )
 
 
+async def _check_chromium_external_http(
+    probe_name: str, *, check_http_server: bool
+) -> ProbeResult:
+    from playwright.async_api import Error, Response, async_playwright
+
+    target_url = "http://example.com"
+    timeout = _CHROMIUM_NAVIGATION_TIMEOUT_MS
+    with permit_process_spawn():
+        async with async_playwright() as playwright:
+            async with (
+                await playwright.chromium.connect(
+                    _PLAYWRIGHT_CHROMIUM_ENDPOINT, timeout=timeout
+                ) as browser,
+                await browser.new_context(offline=False) as context,
+            ):
+                control_page = await context.new_page()
+                if check_http_server:
+                    control = await control_page.goto(_HTTP_SERVER_URL, timeout=timeout)
+                    if control is None or not control.ok:
+                        message = f"Chromium control URL failed: {_HTTP_SERVER_URL}."
+                        return ProbeResult.failure(probe_name, message)
+                else:
+                    await control_page.set_content(
+                        "<h1>Chromium ready</h1>", timeout=timeout
+                    )
+
+                page = await context.new_page()
+                navigation_statuses: list[int] = []
+
+                def record_navigation_response(response: Response) -> None:
+                    if response.request.is_navigation_request():
+                        navigation_statuses.append(response.status)
+
+                page.on("response", record_navigation_response)
+                try:
+                    response = await page.goto(
+                        target_url, wait_until="commit", timeout=timeout
+                    )
+                except Error as error:
+                    # A redirect can return HTTP before its destination fails.
+                    if navigation_statuses:
+                        status = navigation_statuses[0]
+                        message = f"Chromium received HTTP {status} from {target_url}."
+                        return ProbeResult.failure(probe_name, message)
+
+                    match = re.search(r"\bnet::(ERR_[A-Z_]+)\b", error.message)
+                    if match and match[1] in _CHROMIUM_NETWORK_ERRORS:
+                        message = f"Chromium could not reach {target_url}: {match[1]}."
+                        return ProbeResult.success(probe_name, message)
+                    message = f"Chromium navigation failed unexpectedly: {error}"
+                    return ProbeResult.failure(probe_name, message)
+
+                if response is not None:
+                    message = (
+                        f"Chromium received HTTP {response.status} from {target_url}."
+                    )
+                else:
+                    message = (
+                        f"Chromium navigation returned no response from {target_url}."
+                    )
+                return ProbeResult.failure(probe_name, message)
+
+
 def _direct_internet_access_is_allowed(probe_context: ProbeContext) -> bool:
     capabilities = probe_context.specification.capabilities
     return (
@@ -1105,6 +1206,7 @@ NETWORK_PROBES = ProbeGroup(
         proxy_configuration_is_absent,
         proxy_configuration_exists,
         external_http_is_blocked,
+        chromium_external_http_is_blocked,
         external_http_is_allowed,
         disallowed_external_http_is_blocked,
         external_https_is_blocked,

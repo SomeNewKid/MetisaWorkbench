@@ -44,21 +44,26 @@ def test_playwright_chromium(specification: MetisaSpecification):
                     "ws://metisa-playwright-chromium:3000/metisa-browser",
                     timeout=10_000,
                 )
-                internet = Capability.INTERNET in specification.capabilities
+
+                url = (
+                    "http://metisa-http-server:8080/hello"
+                    if Capability.HTTP_SERVER in specification.capabilities
+                    else None
+                )
                 context = browser.new_context(
-                    offline=not internet,
+                    offline=not url,
                     viewport={"width": 640, "height": 360},
                 )
                 try:
                     page = context.new_page()
-                    if internet:
+                    if url:
                         response = page.goto(
-                            "https://example.com/",
+                            url,
                             wait_until="domcontentloaded",
                             timeout=10_000,
                         )
                         if response is None or not response.ok:
-                            print_failure("Example Domain navigation failed.")
+                            print_failure("HTTP Server navigation failed.")
                             return
                     else:
                         page.set_content("<h1>Remote Chromium ready</h1>")

@@ -9,8 +9,8 @@ capabilities = [
     "entity_guard",
     # "jina_reader",
     "code_execution",
-    "llm_server",
-    "llm_broker",
+    # "llm_server",
+    # "llm_broker",
     # "docling",
     # "documents",
     # "qdrant",
@@ -39,7 +39,7 @@ environs = [
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://metisa-otel-collector:4318/v1/traces",
 ]
 secrets = [
-    "secret_key=secret_value222",
+    "secret_key=secret_value",
 ]
 settings = [
     "local_models_directory=C:/Git/__Models",

@@ -14,15 +14,11 @@ from .._docker._docker_container import (
     create_docker_container,
 )
 from .._docker._docker_hardening import (
-    configure_http_proxy,
     harden_docker_container,
 )
 from .._docker._docker_image import (
     build_docker_image,
     docker_image_exists,
-)
-from .._docker._docker_network import (
-    connect_container_to_docker_network,
 )
 from .._sandbox_models import (
     ContainerCreationContext,
@@ -82,11 +78,6 @@ def create_playwright_chromium_container(
         ]
     )
 
-    # Configure use of Squid Proxy
-    squid_proxy_url = container_creation_context.squid_proxy_url
-    if _USE_SQUID_PROXY:
-        configure_http_proxy(environs, squid_proxy_url)
-
     # Get environment variables
     if specification.playwright_chromium is not None:
         resolved_environs = resolve_environs(specification.playwright_chromium.environs)
@@ -112,14 +103,6 @@ def create_playwright_chromium_container(
     )
 
     create_docker_container(arguments)
-
-    if len(container_creation_context.network_names) > 1:
-        for network_name in container_creation_context.network_names[1:]:
-            connect_container_to_docker_network(
-                container_name=container_name,
-                network_name=network_name,
-                aliases=(_PLAYWRIGHT_CHROMIUM_ALIAS,),
-            )
 
     return ContainerCreationResult(container_name)
 

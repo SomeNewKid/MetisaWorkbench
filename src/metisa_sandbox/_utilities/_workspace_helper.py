@@ -81,7 +81,7 @@ def copy_directories_into_staged(
 def _get_ignored_source_entries(
     directory: str,
     entry_names: list[str],
-    *, 
+    *,
     skills_directory: Path | None = None,
 ) -> set[str]:
     ignored_entries: set[str] = set()

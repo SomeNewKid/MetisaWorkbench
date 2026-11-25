@@ -1,0 +1,27 @@
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ENV ASPNETCORE_URLS=http://0.0.0.0:8080
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+    CMD ["curl", "--fail", "--silent", "--show-error", "--noproxy", "*", "http://127.0.0.1:8080/hello"]
+
+ENTRYPOINT ["dotnet", "WebApp.dll"]
+
+# Create non-root web_server group and user
+RUN groupadd --gid 10014 web_server \
+    && useradd \
+     --uid 10014 \
+     --gid 10014 \
+     --create-home \
+     --shell /usr/sbin/nologin \
+     web_server
+
+# Set the default Linux identity for processes executed in the image.
+USER web_server

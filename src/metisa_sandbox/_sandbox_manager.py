@@ -76,6 +76,10 @@ from .haproxy_sidecar.haproxy_manager import (
     create_haproxy_definition,
     verify_haproxy_configuration,
 )
+from .http_server_sidecar.http_server_manager import (
+    create_http_server_container,
+    create_http_server_definition,
+)
 from .jina_reader_sidecar.jina_reader_manager import (
     create_jina_reader_container,
     create_jina_reader_definition,
@@ -168,6 +172,7 @@ def run_metisa_container_workload_in_sandbox(
     postgres_container = create_postgres_definition()
     agent_memory_container = create_agent_memory_definition()
     playwright_chromium_container = create_playwright_chromium_definition()
+    http_server_container = create_http_server_definition()
 
     all_containers = [
         metisa_workload_container,
@@ -187,6 +192,7 @@ def run_metisa_container_workload_in_sandbox(
         postgres_container,
         agent_memory_container,
         playwright_chromium_container,
+        http_server_container,
     ]
 
     try:
@@ -383,6 +389,16 @@ def run_metisa_container_workload_in_sandbox(
                 playwright_chromium_container,
             )
             _start_docker_container(playwright_chromium_container)
+
+        if sandbox_requirements.is_http_server_required:
+            _create_http_server_container(
+                specification,
+                sandbox_requirements,
+                sandbox_context,
+                squid_proxy_container,
+                http_server_container,
+            )
+            _start_docker_container(http_server_container)
 
         _create_metisa_workload_container(
             specification,
@@ -985,13 +1001,6 @@ def _create_playwright_chromium_container(
         failure="Could not create Playwright Chromium container.",
     ):
         network_names = [sandbox_context.workload_network_name]
-        if sandbox_requirements.is_backend_network_required:
-            network_names.append(sandbox_context.backend_network_name)
-        if (
-            _workload_container_needs_squid_proxy(sandbox_requirements)
-            or not sandbox_requirements.is_backend_network_required
-        ):
-            network_names.append(sandbox_context.workload_network_name)
         playwright_chromium_creation_context = _create_creation_context(
             squid_proxy_container=squid_proxy_container,
             network_names=network_names,
@@ -1000,6 +1009,29 @@ def _create_playwright_chromium_container(
             specification, sandbox_context, playwright_chromium_creation_context
         )
         playwright_chromium_container.set_created(playwright_chromium_creation)
+
+
+def _create_http_server_container(
+    specification: MetisaSpecification,
+    sandbox_requirements: SandboxRequirements,
+    sandbox_context: SandboxContext,
+    squid_proxy_container: SandboxContainer,
+    http_server_container: SandboxContainer,
+) -> None:
+    with terminal_status(
+        running="Creating HTTP Server container...",
+        success="Created HTTP Server container.",
+        failure="Could not create HTTP Server container.",
+    ):
+        network_names = [sandbox_context.workload_network_name]
+        http_server_creation_context = _create_creation_context(
+            squid_proxy_container=squid_proxy_container,
+            network_names=network_names,
+        )
+        http_server_creation = create_http_server_container(
+            specification, sandbox_context, http_server_creation_context
+        )
+        http_server_container.set_created(http_server_creation)
 
 
 def _create_creation_context(

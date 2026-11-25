@@ -1,24 +1,25 @@
 agent_name = "sample_agent"
 capabilities = [
     "network",
-    "internet",
+    # "internet",
     # "interactive",
-    "localnet",
-    "mcp_server",
-    "prompt_guard",
-    "entity_guard",
-    "jina_reader",
-    "code_execution",
-    "llm_server",
-    "llm_broker",
-    "docling",
-    "documents",
-    "qdrant",
-    "embeddings",
-    "otel_collector",
-    "postgres",
-    "agent_memory",
+    # "localnet",
+    # "mcp_server",
+    # "prompt_guard",
+    # "entity_guard",
+    # "jina_reader",
+    # "code_execution",
+    # "llm_server",
+    # "llm_broker",
+    # "docling",
+    # "documents",
+    # "qdrant",
+    # "embeddings",
+    # "otel_collector",
+    # "postgres",
+    # "agent_memory",
     "playwright_chromium",
+    "http_server",
 ]
 dependencies = [
     "cryptography==48.0.1",
@@ -40,7 +41,7 @@ environs = [
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://metisa-otel-collector:4318/v1/traces",
 ]
 secrets = [
-    "secret_key=secret_value222",
+    "secret_key=secret_value",
 ]
 settings = [
     "local_models_directory=C:/Git/__Models",
@@ -141,4 +142,7 @@ secrets = [
 ]
 
 [playwright_chromium]
+environs = []
+
+[http_server]
 environs = []

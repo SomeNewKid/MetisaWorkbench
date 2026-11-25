@@ -25,6 +25,7 @@ from .test_suite.docling import test_docling
 from .test_suite.documents import test_documents
 from .test_suite.embeddings import test_embeddings
 from .test_suite.entity_guard import test_entity_guard
+from .test_suite.http_server import test_http_server
 from .test_suite.interactivity import test_interactivity
 from .test_suite.internet import test_internet_access
 from .test_suite.jina_reader import test_jina_reader
@@ -98,6 +99,7 @@ def _run_tests(specification: MetisaSpecification) -> None:
     test_embeddings(specification)
     test_secrets(specification)
     test_agent_memory(specification)
+    test_http_server(specification)
     test_playwright_chromium(specification)
 
     print()

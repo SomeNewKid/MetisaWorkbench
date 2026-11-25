@@ -12,7 +12,7 @@ def test_playwright_chromium_invalid_if_no_network_capability() -> None:
     toml = """
         agent_name = "sample_agent"
         capabilities = [
-            "mcp_server", "prompt_guard", "entity_guard", "playwright_chromium",
+            "playwright_chromium",
         ]
 
         [playwright_chromium]

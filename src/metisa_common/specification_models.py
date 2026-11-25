@@ -30,6 +30,7 @@ class Capability(StrEnum):
     PROMPT_GUARD = "prompt_guard"
     QDRANT = "qdrant"
     METISA_HARNESS = "metisa_harness"
+    HTTP_SERVER = "http_server"
 
 
 class SpecificationValidationError(ValueError):
@@ -61,6 +62,7 @@ class MetisaSpecification:
     postgres: PostgreSqlSpecification | None
     agent_memory: AgentMemorySpecification | None
     playwright_chromium: PlaywrightChromiumSpecification | None
+    http_server: HttpServerSpecification | None
 
 
 @dataclass(frozen=True)
@@ -195,5 +197,12 @@ class AgentMemorySpecification:
 @dataclass(frozen=True)
 class PlaywrightChromiumSpecification:
     """Represents the Playwright Chromium section of the Metisa specification."""
+
+    environs: frozenset[str]
+
+
+@dataclass(frozen=True)
+class HttpServerSpecification:
+    """Represents the HTTP Server section of the Metisa specification."""
 
     environs: frozenset[str]

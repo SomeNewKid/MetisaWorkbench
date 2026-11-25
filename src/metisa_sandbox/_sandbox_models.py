@@ -101,6 +101,11 @@ class SandboxRequirements:
         return Capability.PLAYWRIGHT_CHROMIUM in self._specification.capabilities
 
     @property
+    def is_http_server_required(self) -> bool:
+        """Returns a flag indicating if the HTTP Server sidecar is required."""
+        return Capability.HTTP_SERVER in self._specification.capabilities
+
+    @property
     def is_internet_access_required(self) -> bool:
         """Returns a flag indicating if internet access is required."""
         return Capability.INTERNET in self._specification.capabilities

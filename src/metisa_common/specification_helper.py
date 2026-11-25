@@ -22,6 +22,7 @@ from .specification_models import (
     EmbeddingsSpecification,
     HaproxyBackend,
     HaproxySpecification,
+    HttpServerSpecification,
     JinaReaderSpecification,
     LlmBrokerSpecification,
     LlmModel,
@@ -387,6 +388,7 @@ def _create_metisa_specification(
             "postgres",
             "agent_memory",
             "playwright_chromium",
+            "http_server",
         }
     )
 
@@ -414,6 +416,7 @@ def _create_metisa_specification(
     postgres = _get_postgres_specification(toml)
     agent_memory = _get_agent_memory_specification(toml)
     playwright_chromium = _get_playwright_chromium_specification(toml)
+    http_server = _get_http_server_specification(toml)
 
     specification = MetisaSpecification(
         agent_name=agent_name,
@@ -437,6 +440,7 @@ def _create_metisa_specification(
         postgres=postgres,
         agent_memory=agent_memory,
         playwright_chromium=playwright_chromium,
+        http_server=http_server,
     )
 
     validate_specification(specification)
@@ -1220,9 +1224,36 @@ def _get_playwright_chromium_specification(
 
     _validate_known_keys(playwright_chromium, "playwright_chromium", PLAY_CHROMIUM_KEYS)
 
-    environs = _get_environs(playwright_chromium, "PostgreSql environs")
+    environs = _get_environs(playwright_chromium, "Playwright Chromium environs")
 
     return PlaywrightChromiumSpecification(
+        environs=environs,
+    )
+
+
+def _get_http_server_specification(
+    toml: dict[str, object],
+) -> HttpServerSpecification | None:
+    http_server = toml.get("http_server")
+    if not http_server:
+        return None
+
+    if not isinstance(http_server, dict):
+        raise SpecificationValidationError(
+            "TOML specification http_server must be a table."
+        )
+
+    HTTP_SERVER_KEYS = frozenset(
+        {
+            "environs",
+        }
+    )
+
+    _validate_known_keys(http_server, "http_server", HTTP_SERVER_KEYS)
+
+    environs = _get_environs(http_server, "HTTP Server environs")
+
+    return HttpServerSpecification(
         environs=environs,
     )
 

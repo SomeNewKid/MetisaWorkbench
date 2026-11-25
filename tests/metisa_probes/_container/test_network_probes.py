@@ -2,10 +2,12 @@ import errno
 import socket
 import urllib.error
 from collections.abc import Callable
+from contextlib import nullcontext
 from email.message import Message
-from unittest.mock import MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
+from playwright import async_api
 
 from metisa_common.specification_models import (
     Capability,
@@ -184,6 +186,77 @@ def test_https_connect_proxy_denial(
 
 
 @pytest.mark.parametrize(
+    "outcome,expected,diagnostic",
+    [
+        ("blocked", True, "ERR_NAME_NOT_RESOLVED"),
+        ("response", False, "HTTP 403"),
+        ("redirect", False, "HTTP 302"),
+        ("closed", False, "failed unexpectedly"),
+        ("no_response", False, "returned no response"),
+        ("control_failed", False, "control URL"),
+        ("connect_failed", False, "Could not verify Chromium network access"),
+    ],
+)
+def test_chromium_external_http_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    context_with: Callable[..., ProbeContext],
+    outcome: str,
+    expected: bool,
+    diagnostic: str,
+) -> None:
+    playwright = MagicMock()
+    browser = MagicMock()
+    browser.__aenter__.return_value = browser
+    context = MagicMock()
+    context.__aenter__.return_value = context
+    control_page = Mock(
+        goto=AsyncMock(return_value=Mock(ok=outcome != "control_failed"))
+    )
+    external_page = Mock(goto=AsyncMock())
+    playwright.chromium.connect = AsyncMock(return_value=browser)
+    browser.new_context = AsyncMock(return_value=context)
+    context.new_page = AsyncMock(side_effect=[control_page, external_page])
+    manager = MagicMock()
+    manager.__aenter__.return_value = playwright
+    monkeypatch.setattr(async_api, "async_playwright", lambda: manager)
+    monkeypatch.setattr(probes, "permit_process_spawn", nullcontext)
+
+    if outcome == "connect_failed":
+        playwright.chromium.connect.side_effect = async_api.Error("Connection closed")
+
+    async def navigate(*args: object, **kwargs: object) -> Mock | None:
+        if outcome == "response":
+            return Mock(status=403)
+        if outcome == "no_response":
+            return None
+        if outcome == "redirect":
+            _, record_response = external_page.on.call_args.args
+            request = Mock(is_navigation_request=Mock(return_value=True))
+            record_response(Mock(status=302, request=request))
+        if outcome == "closed":
+            raise async_api.Error("Target page, context or browser has been closed")
+        raise async_api.Error(
+            "Page.goto: net::ERR_NAME_NOT_RESOLVED at http://example.com/"
+        )
+
+    external_page.goto.side_effect = navigate
+    capabilities = _INTERNET | {Capability.PLAYWRIGHT_CHROMIUM, Capability.HTTP_SERVER}
+    result = probes.chromium_external_http_is_blocked(
+        context_with(capabilities=capabilities)
+    )
+
+    assert result.passed is expected, result.message
+    assert diagnostic in result.message
+    if outcome in ("connect_failed", "control_failed"):
+        external_page.goto.assert_not_awaited()
+    else:
+        browser.new_context.assert_awaited_once_with(offline=False)
+        external_page.goto.assert_awaited_once_with(
+            "http://example.com", wait_until="commit", timeout=10_000
+        )
+
+
+@pytest.mark.parametrize(
     "probe",
     [
         probes.docker_network_alias_resolved,
@@ -199,6 +272,7 @@ def test_https_connect_proxy_denial(
         probes.otel_collector_listener_is_reachable,
         probes.otel_collector_listener_is_unavailable,
         probes.external_http_is_allowed,
+        probes.chromium_external_http_is_blocked,
         probes.external_https_is_allowed,
         probes.disallowed_external_http_is_blocked,
         probes.disallowed_external_https_is_blocked,
