@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from copy import deepcopy
 
 import httpx2
 from mcp.types import Tool
@@ -10,6 +11,8 @@ from openai.types.chat import (
     ChatCompletionFunctionToolParam,
     ChatCompletionMessageParam,
 )
+
+from metisa_common.mcp_helper import MODEL_REASONING_FIELD_NAME
 
 from .models import (
     LlmMessage,
@@ -143,12 +146,21 @@ class OpenAiLlmClient:
         definitions: list[ChatCompletionFunctionToolParam] = []
 
         for tool in tools:
+            input_schema = deepcopy(tool.input_schema)
+            input_properties = input_schema.setdefault("properties", {})
+            input_properties.setdefault(
+                MODEL_REASONING_FIELD_NAME,
+                {
+                    "type": "string",
+                    "description": "Briefly explain the reason for calling this tool.",
+                },
+            )
             definition: ChatCompletionFunctionToolParam = {
                 "type": "function",
                 "function": {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "parameters": tool.input_schema,
+                    "parameters": input_schema,
                     "strict": False,
                 },
             }

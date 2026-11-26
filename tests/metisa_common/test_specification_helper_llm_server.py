@@ -219,7 +219,7 @@ def test_llm_server_model_invalid_fields(field: str, value: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "alias", ["granite", "qwen-3", "g", "1", "3b", "g--q4", "a" * 52]
+    "alias", ["granite", "qwen-3-small", "g", "1", "3b", "g--q4", "a" * 52]
 )
 def test_llm_server_model_valid_alias(alias: str) -> None:
     """Accept lowercase DNS labels up to 63 characters including the prefix."""

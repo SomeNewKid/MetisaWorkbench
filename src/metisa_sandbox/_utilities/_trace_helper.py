@@ -3,6 +3,7 @@
 import json
 from collections import defaultdict
 from pathlib import Path
+from textwrap import wrap
 from typing import Any
 
 _Span = dict[str, Any]
@@ -71,12 +72,14 @@ def _summarize(spans: list[_Span]) -> list[str]:
             "?",
         )
         turn_number = f"{turn}".rjust(3)
-        lines.append(f"Turn {turn_number}   {'Model call':<33}  {_elapsed(model)}")
+        lines.append(f"Turn {turn_number}   {'Model call':<63}  {_elapsed(model)}")
         tools = tools_by_model[(model["traceId"], model["spanId"])]
         for index, tool in enumerate(tools, start=1):
             branch = "└─" if index == len(tools) else "├─"
             name = tool["name"].removeprefix("execute_tool ")
-            lines.append(f"         {branch} {name:<31} {_elapsed(tool)}")
+            lines.append(f"           {branch} {name:<61} {_elapsed(tool)}")
+            continuation = "|" if index < len(tools) else " "
+            lines.extend(_reason_lines(tool, indent=f"           {continuation}  "))
 
     if unlinked_tools:
         lines.append("Tool calls with no matching model span")
@@ -96,3 +99,20 @@ def _elapsed(span: _Span) -> str:
     if status in (2, "STATUS_CODE_ERROR"):
         duration += " [error]"
     return duration
+
+
+def _reason_lines(span: _Span, *, indent: str) -> list[str]:
+    for attribute in span.get("attributes", []):
+        if attribute["key"] != "metisa.tool.model_reasoning":
+            continue
+
+        value = attribute["value"].get("stringValue", "")
+        reason = " ".join(value.split())
+        if reason:
+            return wrap(
+                f"Reason: {reason}",
+                width=78,
+                initial_indent=indent,
+                subsequent_indent=indent + "  ",
+            )
+    return []

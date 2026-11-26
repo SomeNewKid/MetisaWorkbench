@@ -144,8 +144,10 @@ async def _run_agent(
         prompt = await asyncio.to_thread(read_user_input, "Enter prompt: ")
 
     models = [
-        "gpt-4o",  # online frontier model
+        # "gpt-4o",  # online frontier model
         # "granite-4-1b",  # local small model
+        # "qwen-3-small",  # local small model
+        "qwen-3-5-small",  # local small model
     ]
 
     if Capability.LLM_BROKER not in specification.capabilities:
@@ -288,7 +290,7 @@ async def _write_lifecycle_event(
     output_directory = Path(os.environ["SANDBOX_OUTPUT_DIR"])
     log_directory = output_directory / ".logs" / "metisa"
     log_directory.mkdir(parents=True, exist_ok=True)
-    log_path = log_directory / f"lifecycle-{model_name}.txt"
+    log_path = log_directory / "lifecycle.txt"
 
     details = [event.agent_name, event.kind]
 

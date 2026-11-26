@@ -451,7 +451,8 @@ def run_metisa_container_workload_in_sandbox(
                     write_friendly_trace(telemetry_directory)
                 except Exception as error:
                     cleanup_errors.append(
-                        f"Could not write telemetry/friendly.txt: {error}")
+                        f"Could not write telemetry/friendly.txt: {error}"
+                    )
 
                 remove_sandbox_networks(
                     all_networks,

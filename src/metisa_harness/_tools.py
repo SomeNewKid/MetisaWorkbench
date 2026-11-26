@@ -9,8 +9,9 @@ from uuid import uuid4
 from jsonschema import validate
 from mcp import Client
 from mcp.types import Tool
+from opentelemetry import trace
 
-from metisa_common.mcp_helper import create_tool
+from metisa_common.mcp_helper import MODEL_REASONING_FIELD_NAME, create_tool
 
 from ._guardrails import apply_guardrails
 from .guardrails import GuardrailMetadata
@@ -32,6 +33,15 @@ async def invoke_tool_call(
 
     if not isinstance(arguments, dict):
         raise ValueError("Tool arguments must be a JSON object.")
+
+    original_properties = registered.tool.input_schema.get("properties", {})
+    if MODEL_REASONING_FIELD_NAME not in original_properties:
+        reasoning = arguments.pop(MODEL_REASONING_FIELD_NAME, None)
+        if isinstance(reasoning, str):
+            reasoning = reasoning.strip()
+            if reasoning:
+                tool_span = trace.get_current_span()
+                tool_span.set_attribute("metisa.tool.model_reasoning", reasoning[:500])
 
     metadata = GuardrailMetadata(
         agent_name=agent.name,

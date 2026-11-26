@@ -7,6 +7,8 @@ from typing import TypeVar, get_type_hints
 from mcp.types import Tool
 from pydantic import create_model
 
+MODEL_REASONING_FIELD_NAME = "model_reasoning"
+
 _ToolFunction = TypeVar("_ToolFunction", bound=Callable[..., object])
 
 
@@ -55,6 +57,12 @@ def _create_input_schema(
 
     fields = {}
     for name, param in signature.parameters.items():
+        if name == MODEL_REASONING_FIELD_NAME:
+            raise ValueError(
+                f"Function {func.__name__} cannot have a parameter named "
+                f"'{MODEL_REASONING_FIELD_NAME}'."
+            )
+
         # fall back to object if no type hint is provided
         hint = type_hints.get(name, object)
 

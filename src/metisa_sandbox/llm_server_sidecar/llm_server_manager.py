@@ -120,7 +120,7 @@ def _create_llm_server_container(
         environs=[],
         username="llama",
         cpu_count=None,
-        memory="3g",
+        memory="4g",
         number_of_files=512,
         health_start_seconds=540,
     )

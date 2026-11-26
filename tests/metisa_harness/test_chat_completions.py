@@ -61,13 +61,25 @@ def test_run_sends_openai_tool_definitions(
     assert result.final_output == "Hello."
     if include_tools:
         local = create_tool(_get_current_date_and_time)
+        reasoning_property = {
+            "model_reasoning": {
+                "type": "string",
+                "description": "Briefly explain the reason for calling this tool.",
+            },
+        }
+        local_schema = local.input_schema | {
+            "properties": local.input_schema["properties"] | reasoning_property,
+        }
+        remote_schema = remote.input_schema | {
+            "properties": remote.input_schema["properties"] | reasoning_property,
+        }
         assert request["tools"] == [
             {
                 "type": "function",
                 "function": {
                     "name": local.name,
                     "description": local.description,
-                    "parameters": local.input_schema,
+                    "parameters": local_schema,
                     "strict": False,
                 },
             },
@@ -76,11 +88,12 @@ def test_run_sends_openai_tool_definitions(
                 "function": {
                     "name": "remote",
                     "description": "",
-                    "parameters": remote.input_schema,
+                    "parameters": remote_schema,
                     "strict": False,
                 },
             },
         ]
+        assert "model_reasoning" not in remote.input_schema["properties"]
         assert request["tool_choice"] == "auto"
         server.call_tool.assert_not_awaited()
     else:
