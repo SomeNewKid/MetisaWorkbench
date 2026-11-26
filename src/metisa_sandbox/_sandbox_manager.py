@@ -43,6 +43,9 @@ from ._utilities._identity_helper import (
     create_run_signing_key_pair,
     issue_run_token,
 )
+from ._utilities._trace_helper import (
+    write_friendly_trace,
+)
 from ._utilities._workspace_helper import (
     clean_up_secrets_files,
     clean_up_staged_sources,
@@ -442,6 +445,13 @@ def run_metisa_container_workload_in_sandbox(
                     cleanup_errors,
                     all_containers,
                 )
+
+                telemetry_directory = sandbox_context.host_logs_path / "telemetry"
+                try:
+                    write_friendly_trace(telemetry_directory)
+                except Exception as error:
+                    cleanup_errors.append(
+                        f"Could not write telemetry/friendly.txt: {error}")
 
                 remove_sandbox_networks(
                     all_networks,

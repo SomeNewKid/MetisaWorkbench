@@ -7,6 +7,8 @@ import json
 from copy import deepcopy
 from dataclasses import replace
 
+from opentelemetry import trace
+
 from ._context_manager import FullHistoryContextBuilder
 from ._guardrails import apply_guardrails
 from ._lifecycle import LifecycleEmitter
@@ -23,6 +25,8 @@ from .models import (
     ModelContext,
     RunResult,
 )
+
+_TRACER = trace.get_tracer(__name__)
 
 
 class AgentHarness:
@@ -153,7 +157,21 @@ class AgentHarness:
 
             await events.emit("model_started", turn=turn)
 
-            response = await llm.complete(model_context=model_context)
+            with _TRACER.start_as_current_span(
+                "metisa.model_turn",
+                attributes={
+                    "metisa.agent.name": agent.name,
+                    "metisa.turn": turn,
+                    "gen_ai.request.model": agent.model,
+                },
+                record_exception=False,
+            ) as turn_span:
+                response = await llm.complete(model_context=model_context)
+                turn_span.set_attribute(
+                    "metisa.model.tool_call_count",
+                    len(response.tool_calls),
+                )
+                model_span_context = turn_span.get_span_context()
 
             await events.emit("model_completed", turn=turn)
 
@@ -211,6 +229,9 @@ class AgentHarness:
 
                 return RunResult(final_output=final_output, messages=history)
 
+            model_links = (
+                [trace.Link(model_span_context)] if model_span_context.is_valid else []
+            )
             for tool_call in response.tool_calls:
                 await events.emit(
                     "tool_started",
@@ -219,11 +240,28 @@ class AgentHarness:
                     tool_call_id=tool_call.id,
                 )
 
-                output = await invoke_tool_call(
-                    agent,
-                    tool_registry,
-                    tool_call,
-                )
+                with _TRACER.start_as_current_span(
+                    f"execute_tool {tool_call.name}",
+                    links=model_links,
+                    attributes={
+                        "gen_ai.operation.name": "execute_tool",
+                        "gen_ai.tool.name": tool_call.name,
+                        "gen_ai.tool.call.id": tool_call.id,
+                        "metisa.turn": turn,
+                    },
+                    record_exception=False,
+                    set_status_on_exception=False,
+                ) as tool_span:
+                    try:
+                        output = await invoke_tool_call(
+                            agent,
+                            tool_registry,
+                            tool_call,
+                        )
+                    except Exception as error:
+                        tool_span.set_attribute("error.type", type(error).__name__)
+                        tool_span.set_status(trace.StatusCode.ERROR)
+                        raise
 
                 await events.emit(
                     "tool_completed",

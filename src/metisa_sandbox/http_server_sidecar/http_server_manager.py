@@ -55,7 +55,8 @@ def create_http_server_container(
     entry_assembly = publish_directory / "WebApp.dll"
     if not entry_assembly.is_file():
         raise RuntimeError(
-            f"Missing {entry_assembly}. Publish WebApp before starting the sandbox.")
+            f"Missing {entry_assembly}. Publish WebApp before starting the sandbox."
+        )
 
     image_name = _ensure_http_server_image_exists(specification)
     container_name = _create_http_server_container_name(run_identifier)

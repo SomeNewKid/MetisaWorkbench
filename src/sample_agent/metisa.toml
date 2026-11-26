@@ -2,7 +2,7 @@ agent_name = "sample_agent"
 capabilities = [
     "network",
     "internet",
-    "interactive",
+    # "interactive",
     # "localnet",
     "mcp_server",
     "prompt_guard",
@@ -10,12 +10,12 @@ capabilities = [
     # "jina_reader",
     "code_execution",
     # "llm_server",
-    # "llm_broker",
+    "llm_broker",
     # "docling",
     # "documents",
     # "qdrant",
     # "embeddings",
-    # "otel_collector",
+    "otel_collector",
     # "postgres",
     # "agent_memory",
     "metisa_harness",
@@ -97,7 +97,7 @@ secrets = [
     "OPENAI_API_KEY=${host:OPENAI_API_KEY}",
 ]
 local_models = [
-    "granite-4-1b",
+    # "granite-4-1b",
     # "qwen-3-small",
 ]
 online_models = [

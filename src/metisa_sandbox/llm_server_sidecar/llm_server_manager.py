@@ -138,7 +138,7 @@ def _create_llm_server_container(
             "--port",
             "8080",
             "--ctx-size",
-            "2048",
+            "8192",
             "--parallel",
             "1",
             "--threads",

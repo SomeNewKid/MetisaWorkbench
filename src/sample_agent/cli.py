@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 from contextlib import AsyncExitStack
+from functools import partial
 from pathlib import Path
 from textwrap import dedent
 
@@ -56,8 +57,6 @@ from ._tools import (
     get_robot_motor_temperature,
     issue_refund,
 )
-
-_PRINT_LIFECYCLE_EVENTS = False
 
 _root_directory = Path(__file__).parent
 _metisa_json_path = _root_directory / "metisa.toml"
@@ -211,19 +210,27 @@ async def _run_agent_model(
             model=model_name,
             instructions=dedent("""
                 Answer the user's question as simply as possible.
+
                 Provide the answer as plain text, and not as Markdown or JSON.
+
                 Discover the date and time with get_current_date_time.
+
                 Discover available filenames with get_list_of_available_documents,
                 then retrieve relevant excerpts with get_semantic_chunks_from_document.
+
                 Check the documents before asking the user to supply a filename.
+
                 For product questions, call get_product_details,
                 passing the product code exactly as supplied by the user,
                 including its capitalization and surrounding spaces.
+
                 For robot inspections, identify the matching skill and 
                 follow its checklist.  If you cannot load the checklist or
                 a required reference, stop and explain the failure.
+
                 Do not guess the answer if it is not available in the documents 
                 or through the tools.
+
                 If you cannot find the answer, explain what documents were checked and
                 which tools were used, before stating that the answer is not available.
                 """),
@@ -251,7 +258,9 @@ async def _run_agent_model(
                     main_agent,
                     run_identifier=run_identifier,
                     input=prompt,
-                    event_handler=_print_lifecycle_event,
+                    event_handler=partial(
+                        _write_lifecycle_event, model_name=model_name
+                    ),
                 )
                 if result.final_output:
                     if main_agent.output_type is ProductDetails:
@@ -271,16 +280,17 @@ async def _run_agent_model(
                 print_failure(str(error))
 
 
-async def _print_lifecycle_event(
+async def _write_lifecycle_event(
     event: LifecycleEvent,
+    *,
+    model_name: str,
 ) -> None:
-    if not _PRINT_LIFECYCLE_EVENTS:
-        return
+    output_directory = Path(os.environ["SANDBOX_OUTPUT_DIR"])
+    log_directory = output_directory / ".logs" / "metisa"
+    log_directory.mkdir(parents=True, exist_ok=True)
+    log_path = log_directory / f"lifecycle-{model_name}.txt"
 
     details = [event.agent_name, event.kind]
-
-    if event.turn is not None:
-        details.append(f"turn={event.turn}")
 
     if event.turn is not None:
         details.append(f"turn={event.turn}")
@@ -292,7 +302,8 @@ async def _print_lifecycle_event(
         details.append(f"error={event.error_type}")
 
     description = " ".join(details)
-    print(f"{description} [{event.elapsed_seconds:.3f}s]", flush=True)
+    with log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(f"{description} [{event.elapsed_seconds:.3f}s]\n")
 
 
 def _get_first_argument(
