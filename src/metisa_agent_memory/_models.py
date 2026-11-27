@@ -52,7 +52,7 @@ class Memory:
     subject: str
     content: JsonObject
     text: str
-    embedding: list[float]
+    embedding: list[float] | None
     metadata: JsonObject
     valid_to: datetime | None
     created_at: datetime | None
@@ -144,6 +144,9 @@ def _validate_datetime(
 def _validate_embedding(
     embedding: object,
 ) -> None:
+    if embedding is None:
+        return
+    
     if not isinstance(embedding, list):
         raise TypeError("embedding must be a list.")
     if not embedding:

@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
 from typing import cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 import jwt
@@ -49,7 +49,6 @@ _MEMORY_REQUIRED = frozenset(
         "subject",
         "content",
         "text",
-        "embedding",
     }
 )
 _MEMORY_OPTIONAL = frozenset(
@@ -57,8 +56,12 @@ _MEMORY_OPTIONAL = frozenset(
         "metadata",
         "valid_to",
         "expires_at",
+        "embedding",
     }
 )
+
+_STORES: dict[str, MemoryStore] = {}
+_lock = Lock()
 
 
 class _RequestError(Exception):
@@ -102,7 +105,7 @@ class _DatabaseSettings:
                 raise ValueError("POSTGRES_PASSWORD secret is required.")
 
             connection_string = make_conninfo(
-                host="metisa-postgres",
+                host="metisa-postgres-agent-memory",
                 port=5432,
                 dbname="agent_memory",
                 user="postgres",
@@ -177,10 +180,6 @@ class _RequestHandler(BaseHTTPRequestHandler):
     ) -> tuple[HTTPStatus, object, dict[str, str]]:
         target = urlsplit(self.path)
 
-        if target.query:
-            error_message = "URL query parameters are not supported"
-            raise _RequestError(HTTPStatus.BAD_REQUEST, error_message)
-
         if target.fragment:
             error_message = "URL fragment is not supported"
             raise _RequestError(HTTPStatus.BAD_REQUEST, error_message)
@@ -193,7 +192,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
         collection, identifier = self._parse_resource(target.path)
 
         if identifier is None:
-            allowed_methods = {"POST"}
+            allowed_methods = {"GET", "POST"}
         elif collection == "episodes":
             allowed_methods = {"GET", "DELETE"}
         else:
@@ -202,7 +201,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self._require_method(allowed_methods)
 
         connection_string = self._database_settings.get_connection_string()
-        store = MemoryStore(connection_string, namespace)
+        store = _get_store(connection_string, namespace)
+
+        record = None
 
         if self.command == "POST":
             payload = self._read_json()
@@ -223,27 +224,94 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 {"Location": location},
             )
 
-        # All remaining supported operations require an item ID.
-        if identifier is None:
-            raise RuntimeError("An item route requires an identifier.")
-
         if self.command == "GET":
             try:
                 if collection == "episodes":
-                    record = store.get_episode(identifier)
+                    if identifier:
+                        if target.query:
+                            raise _RequestError(
+                                HTTPStatus.BAD_REQUEST,
+                                (
+                                    "URL query parameters not supported "
+                                    "for get-by-id requests."
+                                ),
+                            )
+                        record = store.get_episode(identifier)
 
-                    if record is not None:
-                        _screen_episode(record)
-                        sanitize_episode(record)
-                        record.validate()
-                        _screen_episode(record)
+                        if record is not None:
+                            _prepare_episode_for_read(record)
+                    else:
+                        kind, limit, after = _parse_episode_list_query(target.query)
+                        episodes = store.list_episodes(
+                            kind=kind, limit=limit, after=after
+                        )
+                        page = episodes[:limit]
+                        next_cursor = None
+
+                        if len(episodes) > limit:
+                            last = page[-1]
+                            if last.created_at is None or last.id is None:
+                                raise RuntimeError(
+                                    "Stored episode is missing its page position."
+                                )
+                            next_cursor = f"{last.created_at.isoformat()},{last.id}"
+
+                        items = []
+                        for episode in page:
+                            _prepare_episode_for_read(episode)
+                            items.append(asdict(episode))
+
+                        return (
+                            HTTPStatus.OK,
+                            {
+                                "items": items,
+                                "next_cursor": next_cursor,
+                            },
+                            {},
+                        )
+
                 else:
-                    record = store.get_memory(identifier)
-                    if record is not None:
-                        _screen_memory(record)
-                        sanitize_memory(record)
-                        record.validate()
-                        _screen_memory(record)
+                    if identifier:
+                        if target.query:
+                            raise _RequestError(
+                                HTTPStatus.BAD_REQUEST,
+                                (
+                                    "URL query parameters not supported "
+                                    "for get-by-id requests."
+                                ),
+                            )
+                        record = store.get_memory(identifier)
+                        if record is not None:
+                            _prepare_memory_for_read(record)
+                    else:
+                        subject, limit, after = _parse_memory_list_query(target.query)
+                        memories = store.list_memories(
+                            subject=subject, limit=limit, after=after
+                        )
+                        page = memories[:limit]
+                        next_cursor = None
+
+                        if len(memories) > limit:
+                            last = page[-1]
+                            if last.created_at is None or last.id is None:
+                                raise RuntimeError(
+                                    "Stored memory is missing its page position."
+                                )
+                            next_cursor = f"{last.created_at.isoformat()},{last.id}"
+
+                        items = []
+                        for memory in page:
+                            _prepare_memory_for_read(memory)
+                            items.append(asdict(memory))
+
+                        return (
+                            HTTPStatus.OK,
+                            {
+                                "items": items,
+                                "next_cursor": next_cursor,
+                            },
+                            {},
+                        )
 
             except (TypeError, ValueError, RecursionError) as error:
                 raise _RequestError(
@@ -257,6 +325,11 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return HTTPStatus.OK, asdict(record), {}
 
         if self.command == "PUT":
+            if target.query:
+                raise _RequestError(
+                    HTTPStatus.BAD_REQUEST,
+                    "URL query parameters not supported for put requests.",
+                )
             payload = self._read_json()
             memory = _memory_from_payload(
                 payload,
@@ -275,6 +348,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
             return HTTPStatus.OK, asdict(updated), {}
 
+        if not identifier:
+            raise RuntimeError("An deletion request requires an identifier.")
+        if target.query:
+            raise _RequestError(
+                HTTPStatus.BAD_REQUEST,
+                "URL query parameters not supported for deletion requests.",
+            )
         if collection == "episodes":
             deleted = store.delete_episode(identifier)
         else:
@@ -476,6 +556,22 @@ def main() -> None:
         server.serve_forever()
 
 
+# This approach of purging expired records is a little inelegant,
+# but it is simple, and is sufficient for the MetisaWorkbench project.
+def _get_store(
+    connection_string: str,
+    namespace: str,
+) -> MemoryStore:
+    if namespace not in _STORES:
+        with _lock:
+            if namespace not in _STORES:
+                store = MemoryStore(connection_string, namespace)
+                store.purge_episodes()
+                store.purge_memories()
+                _STORES[namespace] = store
+    return _STORES[namespace]
+
+
 def _episode_from_payload(
     payload: dict[str, object],
     namespace: str,
@@ -526,7 +622,7 @@ def _memory_from_payload(
             subject=cast(str, payload["subject"]),
             content=cast(JsonObject, payload["content"]),
             text=cast(str, payload["text"]),
-            embedding=cast(list[float], payload["embedding"]),
+            embedding=cast(list[float] | None, payload.get("embedding")),
             metadata=cast(JsonObject, payload.get("metadata", {})),
             valid_to=_parse_datetime(payload.get("valid_to"), "valid_to"),
             created_at=None,
@@ -633,6 +729,106 @@ def _screen_memory(
             "text": memory.text,
         }
     )
+
+
+def _parse_episode_list_query(
+    query: str,
+) -> tuple[str | None, int, tuple[datetime, UUID] | None]:
+    try:
+        fields = parse_qs(
+            query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            errors="strict",
+            max_num_fields=3,
+        )
+        for name, values in fields.items():
+            if name not in {"kind", "limit", "after"}:
+                raise ValueError("Unsupported query parameter.")
+            if len(values) != 1:
+                raise ValueError("Repeated query parameter.")
+
+        kind = fields.get("kind", [None])[0]
+        if kind is not None and (not kind.strip() or "\x00" in kind):
+            raise ValueError("Invalid episode kind.")
+
+        limit = int(fields.get("limit", ["10"])[0])
+        if not 1 <= limit <= 20:
+            raise ValueError("Limit must be between 1 and 20.")
+
+        after = None
+        if "after" in fields:
+            created_at_text, id_text = fields["after"][0].split(",", maxsplit=1)
+            created_at = _parse_datetime(created_at_text, "after")
+            if created_at is None:
+                raise ValueError("Cursor timestamp is required.")
+            after = (created_at, UUID(id_text))
+
+    except ValueError as error:
+        raise _RequestError(
+            HTTPStatus.BAD_REQUEST,
+            "Invalid episode list parameters.",
+        ) from error
+
+    return kind, limit, after
+
+
+def _parse_memory_list_query(
+    query: str,
+) -> tuple[str | None, int, tuple[datetime, UUID] | None]:
+    try:
+        fields = parse_qs(
+            query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            errors="strict",
+            max_num_fields=3,
+        )
+        for name, values in fields.items():
+            if name not in {"subject", "limit", "after"}:
+                raise ValueError("Unsupported query parameter.")
+            if len(values) != 1:
+                raise ValueError("Repeated query parameter.")
+
+        subject = fields.get("subject", [None])[0]
+        if subject is not None and (not subject.strip() or "\x00" in subject):
+            raise ValueError("Invalid memory subject.")
+
+        limit = int(fields.get("limit", ["10"])[0])
+        if not 1 <= limit <= 20:
+            raise ValueError("Limit must be between 1 and 20.")
+
+        after = None
+        if "after" in fields:
+            created_at_text, id_text = fields["after"][0].split(",", maxsplit=1)
+            created_at = _parse_datetime(created_at_text, "after")
+            if created_at is None:
+                raise ValueError("Cursor timestamp is required.")
+            after = (created_at, UUID(id_text))
+
+    except ValueError as error:
+        raise _RequestError(
+            HTTPStatus.BAD_REQUEST,
+            "Invalid memory list parameters.",
+        ) from error
+
+    return subject, limit, after
+
+
+def _prepare_episode_for_read(episode: Episode) -> None:
+    episode.validate()
+    _screen_episode(episode)
+    sanitize_episode(episode)
+    episode.validate()
+    _screen_episode(episode)
+
+
+def _prepare_memory_for_read(memory: Memory) -> None:
+    memory.validate()
+    _screen_memory(memory)
+    sanitize_memory(memory)
+    memory.validate()
+    _screen_memory(memory)
 
 
 if __name__ == "__main__":

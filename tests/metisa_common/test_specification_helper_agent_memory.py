@@ -20,11 +20,30 @@ def test_agent_memory_invalid_if_no_network_capability() -> None:
         _ = parse_specification(toml)
 
 
+def test_agent_memory_invalid_if_no_mcp_server_capability() -> None:
+    toml = """
+        agent_name = "sample_agent"
+        capabilities = ["network", "agent_memory"]
+
+        [agent_memory]
+        environs = []
+    """
+    with pytest.raises(SpecificationValidationError):
+        _ = parse_specification(toml)
+
+
 def test_agent_memory_missing_environs() -> None:
     """Handle omitted environment declarations using the table's defaults."""
     toml = """
         agent_name = "sample_agent"
-        capabilities = ["network","postgres","agent_memory"]
+        capabilities = [
+            "network",
+            "mcp_server",
+            "prompt_guard",
+            "entity_guard",
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
     """
@@ -36,7 +55,14 @@ def test_agent_memory_empty_environs() -> None:
     """Accept an explicitly empty environment declaration array."""
     toml = """
         agent_name = "sample_agent"
-        capabilities = ["network","postgres","agent_memory"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         environs = []
@@ -50,7 +76,14 @@ def test_agent_memory_valid_environs() -> None:
     """Preserve literals and references separately from workload environs."""
     toml = """
         agent_name = "sample_agent"
-        capabilities = ["network","postgres","agent_memory"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
         environs = ["SHARED=workload"]
 
         [agent_memory]
@@ -91,7 +124,14 @@ def test_agent_memory_environs_with_invalid_item(item: str) -> None:
     """Reject invalid declarations rather than rejecting the environs field."""
     toml = f"""
         agent_name = "sample_agent"
-        capabilities = ["network","postgres","agent_memory"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         environs = ["VALID=value", {item}, "ALSO_VALID=value"]
@@ -109,7 +149,14 @@ def test_agent_memory_not_iterable_environs(environs: str) -> None:
     """Require environment declarations to be an array."""
     toml = f"""
         agent_name = "sample_agent"
-        capabilities = ["network","postgres","agent_memory"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         environs = {environs}
@@ -128,7 +175,14 @@ def test_agent_memory_environs_reject_duplicate_keys(environs: str) -> None:
     """Reject duplicate variable names within the table's declarations."""
     toml = f"""
         agent_name = "sample_agent"
-        capabilities = ["network","postgres","agent_memory"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         environs = {environs}
@@ -141,7 +195,14 @@ def test_agent_memory_environs_reject_duplicate_keys(environs: str) -> None:
 def test_agent_memory_invalid_if_no_postgres_capability() -> None:
     toml = """
         agent_name="sample_agent"
-        capabilities = ["agent_memory","network"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         tools=[]        
@@ -155,7 +216,14 @@ def test_agent_memory_missing_secrets() -> None:
     """Default omitted MCP secrets to an empty collection."""
     toml = """
         agent_name = "sample_agent"
-        capabilities = ["network", "agent_memory", "postgres"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         environs = []
@@ -169,7 +237,14 @@ def test_agent_memory_empty_secrets() -> None:
     """Recognize an MCP table containing only an empty secrets list."""
     toml = """
         agent_name = "sample_agent"
-        capabilities = ["network", "agent_memory", "postgres"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         secrets = []
@@ -184,7 +259,14 @@ def test_agent_memory_only_secrets() -> None:
     """Hydrate MCP secrets without requiring tools, resources, or environs."""
     toml = """
         agent_name = "sample_agent"
-        capabilities = ["network", "agent_memory", "postgres"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         secrets = ["TOKEN=${host:MCP_TOKEN}"]
@@ -199,7 +281,14 @@ def test_agent_memory_valid_secrets() -> None:
     """Preserve MCP secrets independently of other scopes and environs."""
     toml = """
         agent_name = "sample_agent"
-        capabilities = ["network", "agent_memory", "postgres"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
         secrets = ["SHARED=workload"]
 
         [llm_broker]
@@ -235,7 +324,14 @@ def test_agent_memory_secrets_accept_reserved_names(name: str) -> None:
     """Allow secret names that are reserved for environment declarations."""
     toml = f"""
         agent_name = "sample_agent"
-        capabilities = ["network", "agent_memory", "postgres"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         secrets = ["{name}=value"]
@@ -253,7 +349,14 @@ def test_agent_memory_secrets_with_invalid_item(item: str) -> None:
     """Reject an invalid secret among otherwise valid MCP declarations."""
     toml = f"""
         agent_name = "sample_agent"
-        capabilities = ["network", "agent_memory", "postgres"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         secrets = ["VALID=value", {item}, "ALSO_VALID=value"]
@@ -271,7 +374,14 @@ def test_agent_memory_not_iterable_secrets(secrets: str) -> None:
     """Require MCP secret declarations to be an array."""
     toml = f"""
         agent_name = "sample_agent"
-        capabilities = ["network", "agent_memory", "postgres"]
+        capabilities = [
+            "network",
+            "mcp_server", 
+            "prompt_guard", 
+            "entity_guard", 
+            "postgres",
+            "agent_memory"
+        ]
 
         [agent_memory]
         secrets = {secrets}

@@ -285,7 +285,6 @@ def test_memory_validate_accepts_finite_numeric_embedding(
 @pytest.mark.parametrize(
     ("value", "error_type"),
     [
-        pytest.param(None, TypeError, id="unset"),
         pytest.param((0.25, 0.5), TypeError, id="tuple"),
         pytest.param("[0.25, 0.5]", TypeError, id="string"),
         pytest.param(["0.25"], TypeError, id="string-element"),

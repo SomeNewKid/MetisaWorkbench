@@ -284,7 +284,7 @@ def _invalid_payloads(
         )
     else:
         valid = _memory_payload()
-        required = ("subject", "content", "text", "embedding")
+        required = ("subject", "content", "text")
         invalid_fields = (
             ("subject", ""),
             ("subject", 42),

@@ -443,6 +443,10 @@ def _validate_agent_memory_specification(
             raise SpecificationValidationError(
                 '"agent_memory" capability requires "postgres" capability.'
             )
+        if Capability.MCP_SERVER not in capabilities:
+            raise SpecificationValidationError(
+                '"agent_memory" capability requires "mcp_server" capability.'
+            )
 
     if agent_memory_specification is None:
         return

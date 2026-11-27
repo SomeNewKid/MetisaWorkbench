@@ -29,11 +29,13 @@ from .._sandbox_models import (
 )
 
 _IMAGE_FORMAT_VERSION = 1
-_POSTGRESQL_ALIAS = "metisa-postgres"
-_POSTGRESQL_IMAGE_NAME = "metisa-postgres"
-_POSTGRES_CONTAINER_NAME = "metisa-postgres-agent-memory"
-_GUEST_STORAGE_DIRECTORY = "/var/lib/postgresql"
+_POSTGRESQL_ALIAS = "metisa-postgres-agent-memory"
+_POSTGRESQL_IMAGE_NAME = "metisa-postgres-agent-memory"
 _GUEST_SCHEMA_FILE = "/etc/metisa/schema.sql"
+
+# Fixed container name to prevent concurrent agents
+# from starting separate database servers.
+_POSTGRES_CONTAINER_NAME = "metisa-postgres-agent-memory"
 
 
 def create_postgres_definition() -> SandboxContainer:
@@ -93,7 +95,9 @@ def create_postgres_container(
     arguments.extend(
         [
             "--mount",
-            ("type=volume,source=metisa-agent-memory,target=/var/lib/postgresql"),
+            (
+                "type=volume,source=metisa-postgress-agent-memory,target=/var/lib/postgresql"
+            ),
             "--mount",
             (f"type=bind,source={schema_file},target={_GUEST_SCHEMA_FILE},readonly"),
         ]

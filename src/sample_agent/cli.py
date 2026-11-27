@@ -56,6 +56,7 @@ from ._tools import (
     get_robot_battery_charge,
     get_robot_motor_temperature,
     issue_refund,
+    save_memory,
 )
 
 _root_directory = Path(__file__).parent
@@ -144,10 +145,10 @@ async def _run_agent(
         prompt = await asyncio.to_thread(read_user_input, "Enter prompt: ")
 
     models = [
-        # "gpt-4o",  # online frontier model
-        # "granite-4-1b",  # local small model
-        # "qwen-3-small",  # local small model
-        "qwen-3-5-small",  # local small model
+        "gpt-4o",  # online frontier model
+        # "granite-4-1b",   # local small model
+        # "qwen-3-small",   # local small model
+        # "qwen-3-5-small", # local small model
     ]
 
     if Capability.LLM_BROKER not in specification.capabilities:
@@ -167,6 +168,7 @@ async def _run_agent(
 
     for model in models:
         await _run_agent_model(
+            specification,
             model,
             prompt,
             run_identifier,
@@ -175,7 +177,12 @@ async def _run_agent(
 
 
 async def _run_agent_model(
-    model_name: str, prompt: str, run_identifier: str, *, use_mcp_serer: bool = False
+    specification: MetisaSpecification,
+    model_name: str,
+    prompt: str,
+    run_identifier: str,
+    *,
+    use_mcp_serer: bool = False,
 ) -> None:
     guardrail_plugin = create_product_guardrail_plugin()
 
@@ -206,43 +213,56 @@ async def _run_agent_model(
             remote_mcp_client = await stack.enter_async_context(get_remote_mcp_client())
             mcp_clients.append(remote_mcp_client)
 
+        instructions: list[str] = [dedent("""
+            Answer the user's question as simply as possible.
+
+            Provide the answer as plain text, and not as Markdown or JSON.
+
+            Discover the date and time with get_current_date_time.
+
+            Discover available filenames with get_list_of_available_documents,
+            then retrieve relevant excerpts with get_semantic_chunks_from_document.
+
+            Check the documents before asking the user to supply a filename.
+
+            For product questions, call get_product_details,
+            passing the product code exactly as supplied by the user,
+            including its capitalization and surrounding spaces.
+
+            For robot inspections, identify the matching skill and 
+            follow its checklist.  If you cannot load the checklist or
+            a required reference, stop and explain the failure.
+
+            Do not guess the answer if it is not available in the documents 
+            or through the tools.
+
+            If you cannot find the answer, explain what documents were checked and
+            which tools were used, before stating that the answer is not available.
+            """)]
+
+        tools = [
+            get_current_date_time,
+            get_product_details,
+            get_robot_battery_charge,
+            get_robot_motor_temperature,
+            issue_refund,
+        ]
+
+        if Capability.AGENT_MEMORY in specification.capabilities:
+            tools.append(save_memory)
+
+            instructions.append(dedent("""
+                If the user provides information relevant to agent memory, 
+                such as his or her name or other personal details,
+                save each fact separately using the save_memory tool.
+                """))
+        
         main_agent = AgentDefinition(
             name="sample_agent",
             description="Example agent",  # Description really only used for sub-agents
             model=model_name,
-            instructions=dedent("""
-                Answer the user's question as simply as possible.
-
-                Provide the answer as plain text, and not as Markdown or JSON.
-
-                Discover the date and time with get_current_date_time.
-
-                Discover available filenames with get_list_of_available_documents,
-                then retrieve relevant excerpts with get_semantic_chunks_from_document.
-
-                Check the documents before asking the user to supply a filename.
-
-                For product questions, call get_product_details,
-                passing the product code exactly as supplied by the user,
-                including its capitalization and surrounding spaces.
-
-                For robot inspections, identify the matching skill and 
-                follow its checklist.  If you cannot load the checklist or
-                a required reference, stop and explain the failure.
-
-                Do not guess the answer if it is not available in the documents 
-                or through the tools.
-
-                If you cannot find the answer, explain what documents were checked and
-                which tools were used, before stating that the answer is not available.
-                """),
-            tools=[
-                get_current_date_time,
-                get_product_details,
-                get_robot_battery_charge,
-                get_robot_motor_temperature,
-                issue_refund,
-            ],
+            instructions="\n\n".join(instructions),
+            tools=tools,
             mcp_clients=mcp_clients,
             sub_agents=[email_agent, phone_agent],
             guardrail_plugins=(guardrail_plugin,),

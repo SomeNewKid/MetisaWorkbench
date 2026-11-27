@@ -9,15 +9,15 @@ capabilities = [
     "entity_guard",
     # "jina_reader",
     "code_execution",
-    "llm_server",
+    # "llm_server",
     "llm_broker",
     # "docling",
     # "documents",
     # "qdrant",
     # "embeddings",
     "otel_collector",
-    # "postgres",
-    # "agent_memory",
+    "postgres",
+    "agent_memory",
     "metisa_harness",
 ]
 dependencies = [
@@ -89,7 +89,7 @@ environs = []
 models = [
     # { alias="granite-4-1b", repo = "ibm-granite/granite-4.0-1b-GGUF", revision = "b27c2fe3f211b7f44e80fa620177aea371099aaa", filename = "granite-4.0-1b-Q4_K_M.gguf" },
     # { alias="qwen-3-small", repo = "bartowski/Qwen_Qwen3-1.7B-GGUF", revision = "dcb19155b962dbb6389f4691a982043a8e651022", filename = "Qwen_Qwen3-1.7B-Q4_K_M.gguf" },
-    { alias="qwen-3-5-small", repo = "unsloth/Qwen3.5-4B-GGUF", revision = "6f1365292e0b5bd9493b8f71fea5ed2b3a14e6eb", filename = "Qwen3.5-4B-Q3_K_M.gguf" },
+    # { alias="qwen-3-5-small", repo = "unsloth/Qwen3.5-4B-GGUF", revision = "6f1365292e0b5bd9493b8f71fea5ed2b3a14e6eb", filename = "Qwen3.5-4B-Q3_K_M.gguf" },
 ]
 
 [llm_broker]
@@ -100,7 +100,7 @@ secrets = [
 local_models = [
     # "granite-4-1b",
     # "qwen-3-small",
-    "qwen-3-5-small",
+    # "qwen-3-5-small",
 ]
 online_models = [
     "gpt-4o",

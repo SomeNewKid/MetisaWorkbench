@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import LiteralString
 from uuid import UUID
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import class_row
 from psycopg.types.json import Jsonb
 
@@ -113,6 +115,7 @@ class MemoryStore:
             SELECT {_EPISODE_COLUMNS}
             FROM public.episodes
             WHERE id = %s AND namespace = %s
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
         parameters = (
@@ -120,7 +123,48 @@ class MemoryStore:
             self._namespace,
         )
 
-        return self._fetch_episode(query, parameters)
+        episode = self._fetch_episode(query, parameters)
+
+        return episode
+
+    def list_episodes(
+        self,
+        *,
+        kind: str | None,
+        limit: int,
+        after: tuple[datetime, UUID] | None,
+    ) -> list[Episode]:
+        """Return one page of episodes plus a row to detect another page."""
+        after_at, after_id = after if after is not None else (None, None)
+        query = f"""
+            SELECT {_EPISODE_COLUMNS}
+            FROM public.episodes
+            WHERE namespace = %s
+              AND (%s::text is NULL or kind = %s)
+              AND (
+                   %s::timestamptz is NULL
+                   OR (created_at, id) > (%s::timestamptz, %s::uuid)
+              )
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY created_at, id
+            LIMIT %s
+        """
+        parameters = (
+            self._namespace,
+            kind,
+            kind,
+            after_at,
+            after_at,
+            after_id,
+            limit + 1,
+        )
+
+        with psycopg.connect(self._connection_string, connect_timeout=10) as connection:
+            with connection.cursor(row_factory=class_row(Episode)) as cursor:
+                cursor.execute(query, parameters)
+                episodes = cursor.fetchall()
+
+        return episodes
 
     def delete_episode(
         self,
@@ -140,7 +184,25 @@ class MemoryStore:
             self._namespace,
         )
 
-        return self._delete(query, parameters)
+        deleted = self._delete(query, parameters)
+
+        return deleted
+
+    def purge_episodes(
+        self,
+    ) -> None:
+        """Purge expired episode records."""
+        query = """
+            DELETE FROM public.episodes
+            WHERE namespace = %s
+              AND (expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP)
+        """
+        parameters = (self._namespace,)
+        command = sql.SQL(query)
+
+        with psycopg.connect(self._connection_string, connect_timeout=10) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(command, parameters)
 
     def create_memory(
         self,
@@ -175,7 +237,9 @@ class MemoryStore:
             RETURNING {_MEMORY_COLUMNS}
         """
 
-        embedding = [float(value) for value in memory.embedding]
+        embedding = None
+        if memory.embedding is not None:
+            embedding = [float(value) for value in memory.embedding]
 
         parameters = (
             memory.namespace,
@@ -205,6 +269,8 @@ class MemoryStore:
             SELECT {_MEMORY_COLUMNS}
             FROM public.memories
             WHERE id = %s AND namespace = %s
+              AND (valid_to IS NULL OR valid_to > CURRENT_TIMESTAMP)
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
         parameters = (
@@ -212,7 +278,49 @@ class MemoryStore:
             self._namespace,
         )
 
-        return self._fetch_memory(query, parameters)
+        memory = self._fetch_memory(query, parameters)
+
+        return memory
+
+    def list_memories(
+        self,
+        *,
+        subject: str | None,
+        limit: int = 10,
+        after: tuple[datetime, UUID] | None,
+    ) -> list[Memory]:
+        """Return one page of memories plus a row to detect another page."""
+        after_at, after_id = after if after is not None else (None, None)
+        query = f"""
+            SELECT {_MEMORY_COLUMNS}
+            FROM public.memories
+            WHERE namespace = %s
+              AND (%s::text is NULL or subject = %s)
+              AND (
+                   %s::timestamptz is NULL
+                   OR (created_at, id) > (%s::timestamptz, %s::uuid)
+              )
+              AND (valid_to IS NULL OR valid_to > CURRENT_TIMESTAMP)
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY created_at, id
+            LIMIT %s
+        """
+        parameters = (
+            self._namespace,
+            subject,
+            subject,
+            after_at,
+            after_at,
+            after_id,
+            limit + 1,
+        )
+
+        with psycopg.connect(self._connection_string, connect_timeout=10) as connection:
+            with connection.cursor(row_factory=class_row(Memory)) as cursor:
+                cursor.execute(query, parameters)
+                memories = cursor.fetchall()
+
+        return memories
 
     def update_memory(
         self,
@@ -237,7 +345,9 @@ class MemoryStore:
             RETURNING {_MEMORY_COLUMNS}
         """
 
-        embedding = [float(value) for value in memory.embedding]
+        embedding = None
+        if memory.embedding is not None:
+            embedding = [float(value) for value in memory.embedding]
 
         parameters = (
             memory.subject,
@@ -275,7 +385,25 @@ class MemoryStore:
             self._namespace,
         )
 
-        return self._delete(query, parameters)
+        deleted = self._delete(query, parameters)
+
+        return deleted
+
+    def purge_memories(
+        self,
+    ) -> None:
+        """Purge expired memory records."""
+        query = """
+            DELETE FROM public.memories
+            WHERE namespace = %s
+              AND (expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP)
+        """
+        parameters = (self._namespace,)
+        command = sql.SQL(query)
+
+        with psycopg.connect(self._connection_string, connect_timeout=10) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(command, parameters)
 
     def _fetch_episode(
         self,

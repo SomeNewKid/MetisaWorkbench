@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from uuid import uuid4
 
 import requests
 
@@ -92,6 +94,12 @@ def test_agent_memory(specification: MetisaSpecification):
                 print_failure("Retrieve deleted episode error:", error)
     else:
         print_caution("Skipping re-retrieve episode test.")
+
+    with print_elapsed_time():
+        _test_list_episodes()
+
+    with print_elapsed_time():
+        _test_expired_episodes()
 
     print(flush=True)
     favorite_color = "blue"
@@ -202,9 +210,20 @@ def test_agent_memory(specification: MetisaSpecification):
     else:
         print_caution("Skipping re-retrieve memory test.")
 
+    with print_elapsed_time():
+        _test_list_memories()
+
+    with print_elapsed_time():
+        _test_expired_memories()
+
+    with print_elapsed_time():
+        _test_memory_valid_to()
+
 
 def _save_episode(
     episode_summary: str,
+    *,
+    kind: str = "summary",
 ) -> str:
     if not episode_summary:
         raise ValueError("Episode summary is required.")
@@ -220,7 +239,7 @@ def _save_episode(
         "Authorization": f"Bearer {agent_memory_token}",
     }
     payload = {
-        "kind": "summary",
+        "kind": kind,
         "agent_id": "sample_agent",
         "content": {"summary": episode_summary},
     }
@@ -618,3 +637,301 @@ def _delete_memory(
         raise RuntimeError(f"Agent memory returned an error: {error}") from error
 
     return status_code == 204  # No content
+
+
+def _test_list_episodes() -> None:
+    episode_ids: list[str] = []
+    kind = f"listing-smoke-{uuid4().hex}"
+
+    try:
+        first_id = _save_episode("First listing example.", kind=kind)
+        episode_ids.append(first_id)
+        other_id = _save_episode("An unrelated example.", kind=f"{kind}-other")
+        episode_ids.append(other_id)
+        second_id = _save_episode("Second listing example.", kind=kind)
+        episode_ids.append(second_id)
+
+        token = load_secrets()["METISA_AGENT_MEMORY_TOKEN"]
+        endpoint = "http://metisa-agent-memory:8000/episodes"
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"kind": kind, "limit": "1"}
+
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.get(
+                endpoint, headers=headers, params=params, timeout=(5, 240)
+            )
+            response.raise_for_status()
+            first_page = response.json()
+            cursor = first_page["next_cursor"]
+            if not isinstance(cursor, str) or not cursor:
+                raise RuntimeError("Expected a cursor after the first page.")
+
+            params["after"] = cursor
+            response = session.get(
+                endpoint, headers=headers, params=params, timeout=(5, 240)
+            )
+            response.raise_for_status()
+            second_page = response.json()
+
+        expected = [
+            (first_page, first_id, "First listing example."),
+            (second_page, second_id, "Second listing example."),
+        ]
+        for page, episode_id, summary in expected:
+            items = page["items"]
+            if len(items) != 1 or items[0]["id"] != episode_id:
+                raise RuntimeError("Episode list returned the wrong record or count.")
+            if items[0]["content"]["summary"] != summary:
+                raise RuntimeError("Episode list returned the wrong summary.")
+
+        if second_page["next_cursor"] is not None:
+            raise RuntimeError("Expected the second page to be the last page.")
+
+        print_success("Listed episodes by kind across two pages.")
+    except Exception as error:
+        print_failure("Episode listing error:", error)
+    finally:
+        for episode_id in episode_ids:
+            try:
+                if not _delete_episode(episode_id):
+                    print_failure("Could not clean up listing episode:", episode_id)
+            except Exception as error:
+                print_failure("Episode listing cleanup error:", error)
+
+
+def _test_list_memories() -> None:
+    memory_ids: list[str] = []
+    subject = f"listing-smoke-{uuid4().hex}"
+    endpoint = "http://metisa-agent-memory:8000/memories"
+
+    try:
+        token = load_secrets()["METISA_AGENT_MEMORY_TOKEN"]
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"subject": subject, "limit": "1"}
+
+        with requests.Session() as session:
+            session.trust_env = False
+
+            for record_subject, color in (
+                (subject, "blue"),
+                (f"{subject}-other", "green"),
+                (subject, "red"),
+            ):
+                payload = {
+                    "subject": record_subject,
+                    "content": {"fact": "favorite_color", "value": color},
+                    "text": f"The user's favorite color is {color}.",
+                    "embedding": [0.25, -0.5, 0.75],
+                }
+                response = session.post(
+                    endpoint, headers=headers, json=payload, timeout=(5, 240)
+                )
+                response.raise_for_status()
+                memory_ids.append(response.json()["id"])
+
+            first_id, _, second_id = memory_ids
+            expected_pages = [(first_id, "blue"), (second_id, "red")]
+
+            for page_number, (expected_id, color) in enumerate(expected_pages, start=1):
+                response = session.get(
+                    endpoint, headers=headers, params=params, timeout=(5, 240)
+                )
+                response.raise_for_status()
+                page = response.json()
+                items = page["items"]
+
+                if len(items) != 1 or items[0]["id"] != expected_id:
+                    raise RuntimeError(f"Page {page_number} returned the wrong memory.")
+
+                expected_content = {"fact": "favorite_color", "value": color}
+                if items[0]["content"] != expected_content:
+                    raise RuntimeError(
+                        f"Page {page_number} returned the wrong content."
+                    )
+
+                cursor = page["next_cursor"]
+                if page_number == 1:
+                    if not isinstance(cursor, str) or not cursor:
+                        raise RuntimeError("Expected a cursor after the first page.")
+                    params["after"] = cursor
+                elif cursor is not None:
+                    raise RuntimeError("Expected the second page to be the last page.")
+
+        print_success("Listed memories by subject across two pages.")
+    except Exception as error:
+        print_failure("Memory listing error:", error)
+    finally:
+        for memory_id in memory_ids:
+            try:
+                if not _delete_memory(memory_id):
+                    print_failure("Could not clean up listing memory:", memory_id)
+            except Exception as error:
+                print_failure("Memory listing cleanup error:", error)
+
+
+def _test_expired_episodes() -> None:
+    kind = f"expiry-smoke-{uuid4().hex}"
+    _check_expired_records(
+        collection="episodes",
+        filters={"kind": kind},
+        record={"kind": kind, "content": {"summary": "An example episode."}},
+        delete_record=_delete_episode,
+    )
+
+
+def _test_expired_memories() -> None:
+    subject = f"expiry-smoke-{uuid4().hex}"
+    _check_expired_records(
+        collection="memories",
+        filters={"subject": subject},
+        record={
+            "subject": subject,
+            "content": {"fact": "favorite_color", "value": "blue"},
+            "text": "The user's favorite color is blue.",
+            "embedding": [0.25, -0.5, 0.75],
+        },
+        delete_record=_delete_memory,
+    )
+
+
+def _check_expired_records(
+    *,
+    collection: str,
+    filters: dict[str, str],
+    record: dict[str, object],
+    delete_record: Callable[[str], bool],
+) -> None:
+    record_ids: list[str] = []
+    endpoint = f"http://metisa-agent-memory:8000/{collection}"
+    timeout = (5, 240)
+
+    try:
+        token = load_secrets()["METISA_AGENT_MEMORY_TOKEN"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with requests.Session() as session:
+            session.trust_env = False
+
+            for expires_at in ("2000-01-01T00:00:00Z", "2099-01-01T00:00:00Z"):
+                payload = {**record, "expires_at": expires_at}
+                response = session.post(
+                    endpoint, headers=headers, json=payload, timeout=timeout
+                )
+                response.raise_for_status()
+                record_ids.append(response.json()["id"])
+
+            expired_id, active_id = record_ids
+
+            for record_id, expected_status in ((expired_id, 404), (active_id, 200)):
+                response = session.get(
+                    f"{endpoint}/{record_id}", headers=headers, timeout=timeout
+                )
+                if response.status_code != expected_status:
+                    raise RuntimeError(
+                        f"GET {collection}/{record_id} returned "
+                        f"{response.status_code}, expected {expected_status}."
+                    )
+                if expected_status == 200 and response.json()["id"] != active_id:
+                    raise RuntimeError("GET returned the wrong active record.")
+
+            response = session.get(
+                endpoint,
+                headers=headers,
+                params={**filters, "limit": "2"},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            page = response.json()
+            listed_ids = [item["id"] for item in page["items"]]
+            if listed_ids != [active_id] or page["next_cursor"] is not None:
+                raise RuntimeError(
+                    f"Expected only the active record with no next page. "
+                    f"Listed IDs: {listed_ids}."
+                )
+
+        print_success(f"Expired {collection} are hidden from item and list reads.")
+    except Exception as error:
+        print_failure(f"{collection.capitalize()} expiry error:", error)
+    finally:
+        for record_id in record_ids:
+            try:
+                if not delete_record(record_id):
+                    print_failure("Could not clean up expiry test record:", record_id)
+            except Exception as error:
+                print_failure("Expiry test cleanup error:", error)
+
+
+def _test_memory_valid_to() -> None:
+    memory_ids: list[str] = []
+    subject = f"valid-to-smoke-{uuid4().hex}"
+    endpoint = "http://metisa-agent-memory:8000/memories"
+    timeout = (5, 240)
+    record = {
+        "subject": subject,
+        "content": {"fact": "favorite_color", "value": "blue"},
+        "text": "The user's favorite color is blue.",
+        "embedding": [0.25, -0.5, 0.75],
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+
+    try:
+        token = load_secrets()["METISA_AGENT_MEMORY_TOKEN"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with requests.Session() as session:
+            session.trust_env = False
+
+            for valid_to in ("2000-01-01T00:00:00Z", "2098-01-01T00:00:00Z", None):
+                payload = {**record, "valid_to": valid_to}
+                response = session.post(
+                    endpoint, headers=headers, json=payload, timeout=timeout
+                )
+                response.raise_for_status()
+                memory_ids.append(response.json()["id"])
+
+            historical_id, future_id, open_ended_id = memory_ids
+            for memory_id, expected_status in (
+                (historical_id, 404),
+                (future_id, 200),
+                (open_ended_id, 200),
+            ):
+                response = session.get(
+                    f"{endpoint}/{memory_id}", headers=headers, timeout=timeout
+                )
+                if response.status_code != expected_status:
+                    raise RuntimeError(
+                        f"GET memory {memory_id} returned {response.status_code}, "
+                        f"expected {expected_status}."
+                    )
+                if expected_status == 200 and response.json()["id"] != memory_id:
+                    raise RuntimeError("GET returned the wrong memory.")
+
+            response = session.get(
+                endpoint,
+                headers=headers,
+                params={"subject": subject, "limit": "3"},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            page = response.json()
+            listed_ids = [item["id"] for item in page["items"]]
+            if sorted(listed_ids) != sorted([future_id, open_ended_id]):
+                raise RuntimeError(f"Expected only current memories, got {listed_ids}.")
+            if page["next_cursor"] is not None:
+                raise RuntimeError("Expected all current memories on one page.")
+
+        if not _delete_memory(historical_id):
+            raise RuntimeError("Expected DELETE to remove the historical memory.")
+        memory_ids.remove(historical_id)
+
+        print_success("Memory reads respect valid_to and allow historical deletion.")
+    except Exception as error:
+        print_failure("Memory valid_to error:", error)
+    finally:
+        for memory_id in memory_ids:
+            try:
+                if not _delete_memory(memory_id):
+                    print_failure("Could not clean up valid_to test memory:", memory_id)
+            except Exception as error:
+                print_failure("Memory valid_to cleanup error:", error)

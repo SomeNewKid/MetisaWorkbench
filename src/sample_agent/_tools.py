@@ -7,7 +7,10 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 
+import requests
+
 from metisa_common.mcp_helper import with_output_schema
+from metisa_common.secrets_helper import load_secrets
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,6 +99,15 @@ _ROBOT_BATTERY_RESULT_SCHEMA = {
         "battery": {"type": "number"},
     },
     "required": ["battery"],
+    "additionalProperties": False,
+}
+
+_SAVE_MEMORY_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "identifier": {"type": "string"},
+    },
+    "required": ["identifier"],
     "additionalProperties": False,
 }
 
@@ -211,3 +223,67 @@ def get_robot_motor_temperature(
     return {
         "temperature": temperature,
     }
+
+
+@with_output_schema(_SAVE_MEMORY_RESULT_SCHEMA)
+def save_memory(
+    key: str,
+    value: str,
+) -> dict[str, object]:
+    """Save a single fact about the user."""
+    if not key:
+        raise ValueError("Key is required.")
+    if not value:
+        raise ValueError("Value is required.")
+
+    secrets = load_secrets()
+    agent_memory_token = secrets["METISA_AGENT_MEMORY_TOKEN"]
+    if not agent_memory_token:
+        raise RuntimeError("METISA_AGENT_MEMORY_TOKEN secret is not set.")
+
+    agent_memory_endpoint = "http://metisa-agent-memory:8000/memories"
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {agent_memory_token}",
+    }
+    payload = {
+        "subject": key,
+        "content": {"fact": value},
+        "text": value,
+    }
+
+    content: str | None = None
+    result: dict[str, object] | None = None
+
+    try:
+        with requests.Session() as session:
+            session.trust_env = False  # do not use Squid
+            response = session.post(
+                agent_memory_endpoint,
+                json=payload,
+                headers=headers,
+                timeout=(5, 240),
+            )
+            content = response.text
+            response.raise_for_status()
+        if not content:
+            raise RuntimeError("Agent memory did not return any content.")
+    except Exception as error:
+        raise RuntimeError(f"Agent memory returned an error: {error}") from error
+
+    try:
+        result = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Agent memory returned invalid JSON.") from error
+
+    if result is None:
+        raise RuntimeError("Agent memory returned JSON which could not be loaded.")
+
+    identifier = result.get("id", None)
+
+    if identifier is None:
+        raise RuntimeError("Agent memory JSON response did not include 'id'.")
+    if not isinstance(identifier, str):
+        raise RuntimeError("Agent memory JSON 'id' was not a string.")
+
+    return {"identifier": identifier}
