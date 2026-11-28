@@ -65,6 +65,10 @@ async def invoke_tool_call(
         schema=registered.tool.input_schema,
     )
 
+    arguments_json = json.dumps(arguments, ensure_ascii=False)
+    tool_span = trace.get_current_span()
+    tool_span.set_attribute("metisa.tool.arguments", arguments_json)
+
     result = await registered.invoke(arguments)
 
     after_tool_guardrails = (
@@ -238,7 +242,7 @@ def _register_sub_agent(
         result = await AgentHarness.run(
             sub_agent,
             run_identifier=run_identifier,
-            input=task,
+            prompt=task,
         )
 
         answer = result.final_output

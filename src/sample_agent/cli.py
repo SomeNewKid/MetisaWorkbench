@@ -15,6 +15,7 @@ from mcp import Client
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import TracerProvider
+from pydantic import BaseModel, Field
 
 from metisa_common.clients.mcp_client import get_mcp_server as get_remote_mcp_client
 from metisa_common.specification_helper import (
@@ -32,6 +33,9 @@ from metisa_harness import (
     AgentHarness,
     LifecycleEvent,
 )
+from metisa_harness.models import (
+    RunResult,
+)
 
 from ._guardrails import (
     create_product_guardrail_plugin,
@@ -42,6 +46,13 @@ from ._helper import (
     print_success,
 )
 from ._mcp_server import get_mcp_server as get_local_mcp_server
+from ._memory import (
+    get_all_memories,
+    get_episode,
+    get_snapshot,
+    save_episode,
+    save_memory,
+)
 from ._models import (
     ProductDetails,
 )
@@ -56,7 +67,6 @@ from ._tools import (
     get_robot_battery_charge,
     get_robot_motor_temperature,
     issue_refund,
-    save_memory,
 )
 
 _root_directory = Path(__file__).parent
@@ -64,6 +74,10 @@ _metisa_json_path = _root_directory / "metisa.toml"
 if not _metisa_json_path.is_file():
     raise FileNotFoundError("Sample Agent missing a metisa.toml file.")
 _specification: MetisaSpecification = load_specification(_metisa_json_path)
+
+_USE_HOT_PATH_MEMORIES = True
+_USE_REFLECTION_MEMORIES = True
+_RECORD_MEMORY_SNAPSHOTS = False
 
 
 def main(
@@ -213,7 +227,10 @@ async def _run_agent_model(
             remote_mcp_client = await stack.enter_async_context(get_remote_mcp_client())
             mcp_clients.append(remote_mcp_client)
 
-        instructions: list[str] = [dedent("""
+        use_memory = Capability.AGENT_MEMORY in specification.capabilities
+
+        instructions: list[str] = [
+            dedent("""
             Answer the user's question as simply as possible.
 
             Provide the answer as plain text, and not as Markdown or JSON.
@@ -238,7 +255,11 @@ async def _run_agent_model(
 
             If you cannot find the answer, explain what documents were checked and
             which tools were used, before stating that the answer is not available.
-            """)]
+
+            If you know the user's name, address the user by name in your 
+            final response.
+            """)
+        ]
 
         tools = [
             get_current_date_time,
@@ -248,20 +269,45 @@ async def _run_agent_model(
             issue_refund,
         ]
 
-        if Capability.AGENT_MEMORY in specification.capabilities:
-            tools.append(save_memory)
+        if use_memory:
+            if _USE_HOT_PATH_MEMORIES:
+                tools.append(save_memory)
 
-            instructions.append(dedent("""
-                If the user provides information relevant to agent memory, 
-                such as his or her name or other personal details,
-                save each fact separately using the save_memory tool.
-                """))
-        
+                instructions.append(
+                    dedent("""
+                    If the user provides information relevant to agent memory, 
+                    such as his or her name or other personal details,
+                    save each fact separately using the save_memory tool.
+                    """)
+                )
+
+            await _record_snapshot("snapshot-before-run.md")
+
+            memories = await asyncio.to_thread(get_all_memories)
+            if isinstance(memories, dict) and memories:
+                memory_lines = []
+                for subject, text in memories.items():
+                    if not isinstance(subject, str) or not subject.strip():
+                        continue
+                    if not isinstance(text, str) or not text.strip():
+                        continue
+                    memory_lines.append(f"{subject}: {text}")
+
+                if memory_lines:
+                    memory_intro = "Here are the memories saved from previous sessions:"
+                    memory_lines.insert(0, memory_intro)
+
+                    instructions.append("\n".join(memory_lines))
+
+        complete_instructions = "\n".join(instructions)
+
+        _record_instructions(complete_instructions)
+
         main_agent = AgentDefinition(
             name="sample_agent",
             description="Example agent",  # Description really only used for sub-agents
             model=model_name,
-            instructions="\n\n".join(instructions),
+            instructions=complete_instructions,
             tools=tools,
             mcp_clients=mcp_clients,
             sub_agents=[email_agent, phone_agent],
@@ -279,11 +325,12 @@ async def _run_agent_model(
                 result = await AgentHarness.run(
                     main_agent,
                     run_identifier=run_identifier,
-                    input=prompt,
+                    prompt=prompt,
                     event_handler=partial(
                         _write_lifecycle_event, model_name=model_name
                     ),
                 )
+
                 if result.final_output:
                     if main_agent.output_type is ProductDetails:
                         if isinstance(result.final_output, ProductDetails):
@@ -298,6 +345,27 @@ async def _run_agent_model(
                         print_success(result.final_output)
                 else:
                     raise RuntimeError("No final text returned.")
+
+                if use_memory:
+                    await _record_snapshot("snapshot-before-episodes.md")
+
+                    episode_id = await _save_episode(
+                        main_agent.name,
+                        run_identifier,
+                        result,
+                    )
+                    if _USE_REFLECTION_MEMORIES:
+                        if isinstance(episode_id, str):
+                            episode = await asyncio.to_thread(get_episode, episode_id)
+                            if not isinstance(episode, dict):
+                                raise RuntimeError("Invalid episode format.")
+                            await _create_memories_from_episode(
+                                run_identifier,
+                                episode,
+                            )
+                            await _record_snapshot("snapshow-after-reflection.md")
+                    else:
+                        await _record_snapshot("snapshot-without-reflection.md")
             except Exception as error:
                 print_failure(str(error))
 
@@ -337,3 +405,135 @@ def _get_first_argument(
         return None
 
     return args[0]
+
+
+async def _save_episode(
+    agent_name: str,
+    run_id: str,
+    result: RunResult,
+) -> str | None:
+    user_messages: list[str] = []
+    for message in result.messages:
+        if message.role != "user":
+            continue
+        if not isinstance(message.content, str):
+            continue
+        user_messages.append(message.content)
+
+    if not user_messages:
+        return None
+    return await asyncio.to_thread(
+        save_episode,
+        agent_name,
+        run_id,
+        user_messages,
+    )
+
+
+async def _create_memories_from_episode(
+    run_identifier: str,
+    episode: dict[str, object],
+) -> None:
+    content = episode.get("content", None)
+    if not isinstance(content, dict):
+        raise ValueError("Episode content not in expected list format.")
+    messages = content.get("user_messages", None)
+    if not isinstance(messages, list):
+        raise ValueError("Messages not in expected list format.")
+    if not messages:
+        return
+    instructions = dedent("""
+        Your goal is to review a series of messages submitted by a user to an AI agent,
+        and determine if there are any facts about the user which should be saved
+        as a memory for the AI agent to use in future interactions with the user.
+
+        In particular, there are two types of facts which should be saved as a memory.
+
+        First are personal details about the user, such as his or her name, location,
+        contact details, job, and preferences.
+
+        Second are objects which the user refers to by name, such as the name of a pet,
+        or the name of a robot, name of best friend, and so on.
+
+        It is not a requirement to find facts if the messages do not contain any facts
+        which may be helpful in future interactions with the user.
+
+        Please refer a string dictionary.  The dictionary key is a snake_case 
+        description of the fact, such as user_name, user_job, pet_name, robot_name.
+        The dictionary value is 
+    """)
+    memory_agent = AgentDefinition(
+        "memory_agent",
+        description="",  # only needed for agent as a tool
+        model="gpt-4o",
+        instructions=instructions,
+        output_type=_FactsList,
+    )
+    s = "s" if len(messages) > 1 else ""
+    are = "are" if len(messages) > 1 else "is"
+    prompt_lines = [f"Here {are} the message{s} from which to obtain facts."]
+    message_count = 0
+    for message in messages:
+        if not isinstance(message, str):
+            raise ValueError("Message was not a string.")
+        message_count += 1
+        prompt_lines.extend(
+            [
+                "\n---",
+                message,
+            ]
+        )
+    prompt = "\n".join(prompt_lines)
+    result = await AgentHarness.run(
+        memory_agent,
+        prompt=prompt,
+        run_identifier=f"{run_identifier}-reflection",
+    )
+    if not isinstance(result.final_output, _FactsList):
+        raise ValueError("Unexpected result format.")
+    for fact in result.final_output.facts:
+        await asyncio.to_thread(save_memory, fact.key, fact.value)
+
+
+class _Fact(BaseModel):
+    key: str
+    value: str
+
+
+class _FactsList(BaseModel):
+    facts: list[_Fact] = Field(max_length=5)
+
+
+def _record_instructions(
+    instructions: str,
+) -> None:
+    output_dir = os.environ.get("SANDBOX_OUTPUT_DIR", "")
+    if not output_dir:
+        return
+
+    output_directory = Path(output_dir)
+    output_directory.mkdir(parents=True, exist_ok=True)
+
+    instructions_file = output_directory / "instructions.txt"
+
+    instructions_file.write_text(instructions, encoding="utf-8")
+
+
+async def _record_snapshot(
+    filename: str,
+) -> None:
+    if not _RECORD_MEMORY_SNAPSHOTS:
+        return
+    
+    output_dir = os.environ.get("SANDBOX_OUTPUT_DIR", "")
+    if not output_dir:
+        return
+
+    output_directory = Path(output_dir)
+    output_directory.mkdir(parents=True, exist_ok=True)
+
+    snapshot_file = output_directory / filename
+
+    snapshot = get_snapshot()
+
+    snapshot_file.write_text(snapshot, encoding="utf-8")

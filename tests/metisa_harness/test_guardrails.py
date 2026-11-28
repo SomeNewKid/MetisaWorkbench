@@ -72,7 +72,7 @@ def test_run_applies_lifecycle_transformations(agent: AgentDefinition) -> None:
         AgentHarness.run(
             replace(agent, guardrail_plugins=(plugin,)),
             run_identifier="run-test",
-            input="  Hello.  ",
+            prompt="  Hello.  ",
             llm=llm,
         )
     )
@@ -131,7 +131,7 @@ def test_run_guards_each_tool_call(agent: AgentDefinition, source: str) -> None:
 
     result = asyncio.run(
         AgentHarness.run(
-            definition, run_identifier="run-test", input="Lookup.", llm=llm
+            definition, run_identifier="run-test", prompt="Lookup.", llm=llm
         )
     )
 
@@ -176,7 +176,7 @@ def test_run_orders_callbacks_and_reuses_plugins(agent: AgentDefinition) -> None
         definition = replace(agent, name=name, guardrail_plugins=plugins)
         asyncio.run(
             AgentHarness.run(
-                definition, run_identifier="run-test", input="Start", llm=llm
+                definition, run_identifier="run-test", prompt="Start", llm=llm
             )
         )
         assert llm.calls[0][0][0].content == "Start first second third"
@@ -221,7 +221,7 @@ def test_run_tripwire_aborts_processing(agent: AgentDefinition, stage: str) -> N
     with pytest.raises(GuardrailTripwire) as caught:
         asyncio.run(
             AgentHarness.run(
-                definition, run_identifier="run-test", input="Lookup.", llm=llm
+                definition, run_identifier="run-test", prompt="Lookup.", llm=llm
             )
         )
 
@@ -253,7 +253,7 @@ def test_run_validates_transformed_tool_payload(
     with pytest.raises(ValidationError):
         asyncio.run(
             AgentHarness.run(
-                definition, run_identifier="run-test", input="Lookup.", llm=llm
+                definition, run_identifier="run-test", prompt="Lookup.", llm=llm
             )
         )
 
@@ -276,7 +276,7 @@ def test_run_rejects_invalid_text_from_output_guardrail(
             AgentHarness.run(
                 replace(agent, guardrail_plugins=(plugin,)),
                 run_identifier="run-test",
-                input="Hello.",
+                prompt="Hello.",
                 llm=llm,
             )
         )

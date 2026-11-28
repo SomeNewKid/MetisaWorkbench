@@ -146,7 +146,7 @@ def _validate_embedding(
 ) -> None:
     if embedding is None:
         return
-    
+
     if not isinstance(embedding, list):
         raise TypeError("embedding must be a list.")
     if not embedding:

@@ -35,9 +35,9 @@ class AgentHarness:
     @staticmethod
     async def run(
         agent: AgentDefinition,
+        prompt: str,
         *,
         run_identifier: str,
-        input: str,
         llm: LlmClient | None = None,
         context_builder: ContextBuilder | None = None,
         max_turns: int = 10,
@@ -51,7 +51,7 @@ class AgentHarness:
 
             result = await AgentHarness._run(
                 agent,
-                input=input,
+                input=prompt,
                 llm=llm,
                 context_builder=context_builder,
                 max_turns=max_turns,

@@ -27,6 +27,7 @@ from ._sanitization import sanitize_episode, sanitize_memory
 from ._store import MemoryStore
 
 _MAX_REQUEST_BYTES = 1024 * 1024  # 1 MiB
+_TEXT_CONTENT_TYPE = "text/plain; charset=utf-8"
 
 _EPISODE_REQUIRED = frozenset(
     {
@@ -173,7 +174,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
             payload = {"error": "Internal server error."}
             headers = {}
 
-        self._send_json(status, payload, headers)
+        self._send_payload(status, payload, headers)
 
     def _dispatch(
         self,
@@ -189,6 +190,27 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return HTTPStatus.OK, {"status": "healthy"}, {}
 
         namespace = self._authenticate()
+
+        if target.path == "/snapshot":
+            self._require_method({"GET"})
+            if target.query:
+                raise _RequestError(
+                    HTTPStatus.BAD_REQUEST,
+                    "URL query parameters are not supported for snapshots.",
+                )
+
+            connection_string = self._database_settings.get_connection_string()
+            store = MemoryStore(connection_string, namespace)
+            snapshot = store.get_database_snapshot()
+            return (
+                HTTPStatus.OK,
+                snapshot,
+                {
+                    "Content-Type": _TEXT_CONTENT_TYPE,
+                    "Cache-Control": "no-store",
+                },
+            )
+
         collection, identifier = self._parse_resource(target.path)
 
         if identifier is None:
@@ -501,14 +523,21 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
         return cast(dict[str, object], payload)
 
-    def _send_json(
+    def _send_payload(
         self,
         status: HTTPStatus,
         payload: object,
         headers: dict[str, str],
     ) -> None:
+        headers = headers.copy()
+        content_type = headers.pop("Content-Type", "application/json; charset=utf-8")
+
         if status == HTTPStatus.NO_CONTENT:
             body = b""
+        elif content_type == _TEXT_CONTENT_TYPE:
+            if not isinstance(payload, str):
+                raise TypeError("A plain-text response requires a string.")
+            body = payload.encode("utf-8")
         else:
             text = json.dumps(
                 payload,
@@ -521,14 +550,12 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
 
         if status != HTTPStatus.NO_CONTENT:
-            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
 
         self.send_header("Connection", "close")
-
         for name, value in headers.items():
             self.send_header(name, value)
-
         self.end_headers()
 
         if body:

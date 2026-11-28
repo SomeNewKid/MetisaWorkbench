@@ -36,7 +36,7 @@ def test_run_uses_supplied_llm(agent: AgentDefinition, response: str) -> None:
     with patch("metisa_harness.harness.get_llm") as resolver:
         result = asyncio.run(
             AgentHarness.run(
-                agent, run_identifier="run-test", input="Hello.", llm=llm, max_turns=1
+                agent, run_identifier="run-test", prompt="Hello.", llm=llm, max_turns=1
             )
         )
 
@@ -54,7 +54,7 @@ def test_run_resolves_llm_when_not_supplied(agent: AgentDefinition) -> None:
 
     with patch("metisa_harness.harness.get_llm", return_value=llm) as resolver:
         result = asyncio.run(
-            AgentHarness.run(agent, run_identifier="run-test", input="Hello.")
+            AgentHarness.run(agent, run_identifier="run-test", prompt="Hello.")
         )
 
     resolver.assert_awaited_once_with(agent)
@@ -67,7 +67,7 @@ def test_run_raises_when_llm_unavailable(agent: AgentDefinition) -> None:
     with patch("metisa_harness.harness.get_llm", return_value=None):
         with pytest.raises(RuntimeError, match="^LLM not available\\.$"):
             asyncio.run(
-                AgentHarness.run(agent, run_identifier="run-test", input="Hello.")
+                AgentHarness.run(agent, run_identifier="run-test", prompt="Hello.")
             )
 
 
@@ -78,7 +78,7 @@ def test_run_propagates_llm_error(agent: AgentDefinition) -> None:
 
     with pytest.raises(ConnectionError) as caught:
         asyncio.run(
-            AgentHarness.run(agent, run_identifier="run-test", input="Hello.", llm=llm)
+            AgentHarness.run(agent, run_identifier="run-test", prompt="Hello.", llm=llm)
         )
 
     assert caught.value is error
@@ -94,7 +94,7 @@ def test_run_rejects_missing_final_text(
 
     with pytest.raises(RuntimeError, match="^The model returned no final text\\.$"):
         asyncio.run(
-            AgentHarness.run(agent, run_identifier="run-test", input="Hello.", llm=llm)
+            AgentHarness.run(agent, run_identifier="run-test", prompt="Hello.", llm=llm)
         )
 
 
@@ -110,7 +110,7 @@ def test_run_rejects_invalid_turn_limit(agent: AgentDefinition, max_turns: int) 
             AgentHarness.run(
                 definition,
                 run_identifier="run-test",
-                input="Hello.",
+                prompt="Hello.",
                 llm=llm,
                 max_turns=max_turns,
             )
@@ -143,7 +143,7 @@ def test_run_preserves_history_across_batches_and_repeated_tool_calls(
         AgentHarness.run(
             definition,
             run_identifier="run-test",
-            input="Compare.",
+            prompt="Compare.",
             llm=llm,
             max_turns=3,
         )
@@ -195,7 +195,7 @@ def test_run_returns_a_detached_history_snapshot(agent: AgentDefinition) -> None
         AgentHarness.run(
             replace(agent, tools=[function]),
             run_identifier="run-test",
-            input="Lookup.",
+            prompt="Lookup.",
             llm=llm,
         )
     )
@@ -226,7 +226,7 @@ def test_run_keeps_broker_alias_through_tool_round_trip(
 
     result = asyncio.run(
         AgentHarness.run(
-            definition, run_identifier="run-test", input="Lookup.", max_turns=2
+            definition, run_identifier="run-test", prompt="Lookup.", max_turns=2
         )
     )
 

@@ -28,7 +28,7 @@ def test_run_uses_broker_for_configured_model_alias(
     definition = replace(agent, model=model_alias)
 
     result = asyncio.run(
-        AgentHarness.run(definition, run_identifier="run-test", input="Hi")
+        AgentHarness.run(definition, run_identifier="run-test", prompt="Hi")
     )
 
     assert result.final_output == "Broker answer."
@@ -62,7 +62,7 @@ def test_run_propagates_broker_completion_error(
     client.chat.completions.create.side_effect = error
 
     with pytest.raises(type(error)) as caught:
-        asyncio.run(AgentHarness.run(agent, run_identifier="run-test", input="Hi"))
+        asyncio.run(AgentHarness.run(agent, run_identifier="run-test", prompt="Hi"))
 
     assert caught.value is error
     factory.assert_called_once()

@@ -48,7 +48,9 @@ def test_run_combines_local_tools_and_paginated_mcp_tools(
     llm = _ScriptedLlm(_answer("No tools needed."))
 
     asyncio.run(
-        AgentHarness.run(definition, run_identifier="run-test", input="Hello.", llm=llm)
+        AgentHarness.run(
+            definition, run_identifier="run-test", prompt="Hello.", llm=llm
+        )
     )
 
     assert llm.calls == [
@@ -77,7 +79,7 @@ def test_run_accepts_an_empty_mcp_tool_list(agent: AgentDefinition) -> None:
         AgentHarness.run(
             replace(agent, mcp_clients=[server]),
             run_identifier="run-test",
-            input="Hello.",
+            prompt="Hello.",
             llm=llm,
         )
     )
@@ -112,7 +114,7 @@ def test_run_rejects_duplicate_tool_names(agent: AgentDefinition, source: str) -
     with pytest.raises(ValueError, match=f"^Duplicate tool name: {local.__name__}$"):
         asyncio.run(
             AgentHarness.run(
-                definition, run_identifier="run-test", input="Hello.", llm=llm
+                definition, run_identifier="run-test", prompt="Hello.", llm=llm
             )
         )
 
@@ -133,7 +135,7 @@ def test_run_propagates_mcp_discovery_error(agent: AgentDefinition) -> None:
             AgentHarness.run(
                 replace(agent, mcp_clients=[server]),
                 run_identifier="run-test",
-                input="Hi",
+                prompt="Hi",
                 llm=llm,
             )
         )
@@ -157,7 +159,7 @@ def test_run_invokes_local_tool_and_returns_result_to_model(
         AgentHarness.run(
             definition,
             run_identifier="run-test",
-            input="Look it up.",
+            prompt="Look it up.",
             llm=llm,
             max_turns=2,
         )
@@ -198,7 +200,7 @@ def test_run_routes_mcp_calls_to_the_correct_tool_and_server(
 
     result = asyncio.run(
         AgentHarness.run(
-            definition, run_identifier="run-test", input="Lookup.", llm=llm
+            definition, run_identifier="run-test", prompt="Lookup.", llm=llm
         )
     )
 
@@ -244,7 +246,7 @@ def test_run_rejects_invalid_tool_requests_before_execution(
             AgentHarness.run(
                 replace(agent, tools=[function]),
                 run_identifier="run-test",
-                input="Hi",
+                prompt="Hi",
                 llm=llm,
             )
         )
@@ -267,7 +269,7 @@ def test_run_propagates_local_execution_error(agent: AgentDefinition) -> None:
             AgentHarness.run(
                 replace(agent, tools=[function]),
                 run_identifier="run-test",
-                input="Hi",
+                prompt="Hi",
                 llm=llm,
             )
         )
@@ -290,7 +292,7 @@ def test_run_validates_local_output(agent: AgentDefinition) -> None:
             AgentHarness.run(
                 replace(agent, tools=[function]),
                 run_identifier="run-test",
-                input="Hi",
+                prompt="Hi",
                 llm=llm,
             )
         )
@@ -337,7 +339,7 @@ def test_run_propagates_mcp_tool_failures(
             AgentHarness.run(
                 replace(agent, mcp_clients=[server]),
                 run_identifier="run-test",
-                input="Hi",
+                prompt="Hi",
                 llm=llm,
             )
         )

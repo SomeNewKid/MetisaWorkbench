@@ -48,7 +48,7 @@ def test_run_sends_openai_tool_definitions(
     client.chat.completions.create.return_value = _completion("Hello.")
 
     result = asyncio.run(
-        AgentHarness.run(definition, run_identifier="run-test", input="Hello.")
+        AgentHarness.run(definition, run_identifier="run-test", prompt="Hello.")
     )
 
     client.chat.completions.create.assert_awaited_once()
@@ -125,7 +125,7 @@ def test_run_round_trips_openai_tool_calls_and_results(
 
     result = asyncio.run(
         AgentHarness.run(
-            definition, run_identifier="run-test", input="Lookup.", max_turns=2
+            definition, run_identifier="run-test", prompt="Lookup.", max_turns=2
         )
     )
 
@@ -205,7 +205,7 @@ def test_run_rejects_invalid_openai_responses(
     client.chat.completions.create.return_value = completion_factory()
 
     with pytest.raises(RuntimeError, match=error_message):
-        asyncio.run(AgentHarness.run(agent, run_identifier="run-test", input="Hi"))
+        asyncio.run(AgentHarness.run(agent, run_identifier="run-test", prompt="Hi"))
 
 
 def test_run_omits_tool_choice_when_adapter_disables_it(
@@ -218,7 +218,9 @@ def test_run_omits_tool_choice_when_adapter_disables_it(
     llm = OpenAiLlmClient(model=definition.model, supports_tool_choice=False)
 
     asyncio.run(
-        AgentHarness.run(definition, run_identifier="run-test", input="Hello.", llm=llm)
+        AgentHarness.run(
+            definition, run_identifier="run-test", prompt="Hello.", llm=llm
+        )
     )
 
     client.chat.completions.create.assert_awaited_once()

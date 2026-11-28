@@ -42,7 +42,7 @@ def test_run_returns_typed_output(agent: AgentDefinition) -> None:
         AgentHarness.run(
             replace(agent, output_type=_Answer),
             run_identifier="run-test",
-            input="Answer.",
+            prompt="Answer.",
             llm=llm,
         )
     )
@@ -76,7 +76,7 @@ def test_run_normalizes_dictionary_before_pydantic_validation(
 
     result = asyncio.run(
         AgentHarness.run(
-            definition, run_identifier="run-test", input="Answer.", llm=llm
+            definition, run_identifier="run-test", prompt="Answer.", llm=llm
         )
     )
 
@@ -112,7 +112,7 @@ def test_run_rejects_invalid_typed_output_without_retry(
             AgentHarness.run(
                 replace(agent, output_type=_Answer),
                 run_identifier="run-test",
-                input="Answer.",
+                prompt="Answer.",
                 llm=llm,
             )
         )
@@ -143,7 +143,7 @@ def test_run_rejects_non_object_output_before_guardrails(
     with pytest.raises(error_type):
         asyncio.run(
             AgentHarness.run(
-                definition, run_identifier="run-test", input="Answer.", llm=llm
+                definition, run_identifier="run-test", prompt="Answer.", llm=llm
             )
         )
 
@@ -173,7 +173,7 @@ def test_run_validates_output_guardrail_replacements(
     with pytest.raises(error_type):
         asyncio.run(
             AgentHarness.run(
-                definition, run_identifier="run-test", input="Answer.", llm=llm
+                definition, run_identifier="run-test", prompt="Answer.", llm=llm
             )
         )
 
@@ -192,7 +192,7 @@ def test_run_structured_output_tripwire_propagates(agent: AgentDefinition) -> No
     with pytest.raises(GuardrailTripwire) as caught:
         asyncio.run(
             AgentHarness.run(
-                definition, run_identifier="run-test", input="Answer.", llm=llm
+                definition, run_identifier="run-test", prompt="Answer.", llm=llm
             )
         )
 
@@ -228,7 +228,7 @@ def test_run_sends_output_schema_to_model_adapter(
     )
 
     result = asyncio.run(
-        AgentHarness.run(definition, run_identifier="run-test", input="Answer.")
+        AgentHarness.run(definition, run_identifier="run-test", prompt="Answer.")
     )
 
     assert client.chat.completions.create.await_count == (2 if use_tool else 1)

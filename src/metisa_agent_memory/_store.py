@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import datetime
 from typing import LiteralString
@@ -9,7 +10,7 @@ from uuid import UUID
 
 import psycopg
 from psycopg import sql
-from psycopg.rows import class_row
+from psycopg.rows import class_row, dict_row
 from psycopg.types.json import Jsonb
 
 from ._models import Episode, Memory
@@ -219,7 +220,7 @@ class MemoryStore:
         ):
             raise ValueError("The specified memory is not new.")
 
-        query = f"""
+        insert_query = f"""
             INSERT INTO public.memories (
                 namespace, 
                 subject, 
@@ -241,7 +242,7 @@ class MemoryStore:
         if memory.embedding is not None:
             embedding = [float(value) for value in memory.embedding]
 
-        parameters = (
+        insert_parameters = (
             memory.namespace,
             memory.subject,
             Jsonb(memory.content),
@@ -252,9 +253,30 @@ class MemoryStore:
             memory.expires_at,
         )
 
-        created = self._fetch_memory(query, parameters)
-        if created is None:
-            raise RuntimeError("Memory insertion returned no row.")
+        invalidate_query = """
+            UPDATE public.memories
+            SET valid_to = statement_timestamp(),
+                updated_at = statement_timestamp()
+            WHERE namespace = %s
+              AND subject = %s
+              AND (valid_to IS NULL OR valid_to > statement_timestamp())
+              AND (expires_at IS NULL OR expires_at > statement_timestamp())
+        """
+
+        invalidate_parameters = (
+            self._namespace,
+            memory.subject,
+        )
+
+        with psycopg.connect(self._connection_string, connect_timeout=10) as connection:
+            with connection.cursor(row_factory=class_row(Memory)) as cursor:
+                cursor.execute(invalidate_query, invalidate_parameters)
+                cursor.execute(insert_query, insert_parameters)
+                created = cursor.fetchone()
+
+                if created is None:
+                    raise RuntimeError("Memory insertion returned no row.")
+                created.validate()
 
         return created
 
@@ -404,6 +426,49 @@ class MemoryStore:
         with psycopg.connect(self._connection_string, connect_timeout=10) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(command, parameters)
+
+    def get_database_snapshot(self, max_rows: int = 20) -> str:
+        """Return recent episode and memory rows as Markdown."""
+        if type(max_rows) is not int or max_rows < 1:
+            raise ValueError("max_rows must be a positive integer.")
+
+        episode_query = f"""
+            SELECT {_EPISODE_COLUMNS}
+            FROM public.episodes
+            WHERE namespace = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s
+        """
+        memory_query = f"""
+            SELECT {_MEMORY_COLUMNS}
+            FROM public.memories
+            WHERE namespace = %s
+            ORDER BY updated_at DESC, id DESC
+            LIMIT %s
+        """
+        parameters = (self._namespace, max_rows)
+
+        with psycopg.connect(self._connection_string, connect_timeout=10) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                )
+                cursor.execute(episode_query, parameters)
+                episodes = cursor.fetchall()
+
+                cursor.execute(memory_query, parameters)
+                memories = cursor.fetchall()
+
+        episode_json = json.dumps(episodes, indent=2, ensure_ascii=False, default=str)
+        memory_json = json.dumps(memories, indent=2, ensure_ascii=False, default=str)
+
+        return (
+            "# Agent Memory database snapshot\n\n"
+            f"## Episodes ({len(episodes)})\n\n"
+            f"```json\n{episode_json}\n```\n\n"
+            f"## Memories ({len(memories)})\n\n"
+            f"```json\n{memory_json}\n```\n"
+        )
 
     def _fetch_episode(
         self,

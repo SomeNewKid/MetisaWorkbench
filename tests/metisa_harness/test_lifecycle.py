@@ -49,7 +49,7 @@ def test_run_emits_success_events(agent: AgentDefinition) -> None:
         AgentHarness.run(
             agent,
             run_identifier=_RUN_IDENTIFIER,
-            input="Hello.",
+            prompt="Hello.",
             llm=llm,
             event_handler=collector,
         )
@@ -84,7 +84,7 @@ def test_run_emits_tool_events(agent: AgentDefinition) -> None:
         AgentHarness.run(
             definition,
             run_identifier=_RUN_IDENTIFIER,
-            input="Compare.",
+            prompt="Compare.",
             llm=llm,
             event_handler=collector,
         )
@@ -149,7 +149,7 @@ def test_run_emits_failure_and_preserves_exception(
             AgentHarness.run(
                 definition,
                 run_identifier=_RUN_IDENTIFIER,
-                input="Lookup.",
+                prompt="Lookup.",
                 llm=llm,
                 event_handler=collector,
             )
@@ -172,7 +172,7 @@ def test_run_emits_setup_failure(agent: AgentDefinition) -> None:
                 AgentHarness.run(
                     agent,
                     run_identifier=_RUN_IDENTIFIER,
-                    input="Hello.",
+                    prompt="Hello.",
                     event_handler=collector,
                 )
             )
@@ -222,7 +222,7 @@ def test_run_emits_guardrail_failure(
             AgentHarness.run(
                 definition,
                 run_identifier=_RUN_IDENTIFIER,
-                input="Lookup.",
+                prompt="Lookup.",
                 llm=llm,
                 event_handler=collector,
             )
@@ -248,7 +248,7 @@ def test_run_emits_turn_limit_failure(agent: AgentDefinition) -> None:
             AgentHarness.run(
                 definition,
                 run_identifier=_RUN_IDENTIFIER,
-                input="Lookup.",
+                prompt="Lookup.",
                 llm=llm,
                 max_turns=1,
                 event_handler=collector,
@@ -299,7 +299,7 @@ def test_run_emits_cancellation(agent: AgentDefinition, stage: str) -> None:
             AgentHarness.run(
                 definition,
                 run_identifier=_RUN_IDENTIFIER,
-                input="Lookup.",
+                prompt="Lookup.",
                 llm=llm,
                 event_handler=collector,
             )
@@ -345,7 +345,7 @@ def test_run_logs_handler_errors_without_changing_outcome(
                     AgentHarness.run(
                         agent,
                         run_identifier=_RUN_IDENTIFIER,
-                        input="Hello.",
+                        prompt="Hello.",
                         llm=llm,
                         event_handler=_reject_event,
                     )
@@ -357,7 +357,7 @@ def test_run_logs_handler_errors_without_changing_outcome(
                 AgentHarness.run(
                     agent,
                     run_identifier=_RUN_IDENTIFIER,
-                    input="Hello.",
+                    prompt="Hello.",
                     llm=llm,
                     event_handler=_reject_event,
                 )

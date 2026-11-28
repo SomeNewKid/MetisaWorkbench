@@ -79,8 +79,9 @@ def _summarize(spans: list[_Span]) -> list[str]:
             name = tool["name"].removeprefix("execute_tool ")
             lines.append(f"           {branch} {name:<61} {_elapsed(tool)}")
             continuation = "|" if index < len(tools) else " "
-            lines.extend(_reason_lines(tool, indent=f"           {continuation}  "))
-
+            indent = f"           {continuation}  "
+            lines.extend(_argument_lines(tool, indent=indent))
+            lines.extend(_reason_lines(tool, indent=indent))
     if unlinked_tools:
         lines.append("Tool calls with no matching model span")
         for tool in unlinked_tools:
@@ -115,4 +116,13 @@ def _reason_lines(span: _Span, *, indent: str) -> list[str]:
                 initial_indent=indent,
                 subsequent_indent=indent + "  ",
             )
+    return []
+
+
+def _argument_lines(span: _Span, *, indent: str) -> list[str]:
+    for attribute in span.get("attributes", []):
+        if attribute["key"] == "metisa.tool.arguments":
+            value = attribute["value"].get("stringValue")
+            if value is not None:
+                return [f"{indent}Args: {value}"]
     return []

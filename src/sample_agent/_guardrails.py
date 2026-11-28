@@ -115,7 +115,7 @@ async def _check_length_of_input(
 ) -> str:
     input = context.payload
 
-    if len(input) > 100:
+    if len(input) > 200:
         raise GuardrailTripwire("Input to an AI agent cannot exceed 100 characters.")
 
     return input
