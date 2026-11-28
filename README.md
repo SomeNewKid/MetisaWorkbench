@@ -71,20 +71,20 @@ Sandbox provisioning reads source files and Dockerfiles from the checkout.
 Review the [sample specification](src/sample_agent/metisa.toml) before
 launching the workload from the repository root.
 
-1. Set `local_models_directory` to your model directory. It must contain the
-   [Prompt Guard model files](#run-the-sandbox-test-agent) and the GGUF file
-   declared under `[llm_server].models`, at
-   `<local_models_directory>/<repo>/<revision>/<filename>`. The checked-in
-   configuration starts the local `granite-4-1b` server even though the sample
-   CLI selects `gpt-4o` through the broker.
+1. Set `local_models_directory` to a directory containing the
+   [Prompt Guard model files](#run-the-sandbox-test-agent). The checked-in
+   sample uses `gpt-4o` through the broker. A local model requires enabling
+   `llm_server` and providing the configured GGUF file.
 2. Set `OPENAI_API_KEY` in the PowerShell session that launches the sandbox.
    The broker uses it for `gpt-4o`. Set the diagnostic environment value shown
    below so the pre-workload probe passes.
-3. Set `SANDBOX_TESTER_MARIADB_CREDENTIALS` in `username,password` format if
-   you plan to use the database tool. Using that tool also requires the
-   `localnet` capability and a reachable MariaDB backend. For the examples
-   below, you can remove the database tool and its secret reference from
-   `[mcp_server]`.
+3. Set `METISA_POSTGRES_PASSWORD` for the configured PostgreSQL sidecar. Use
+   the password that initialized the Docker volume when reusing it.
+4. The checked-in `[mcp_server]` references
+   `SANDBOX_TESTER_MARIADB_CREDENTIALS` in `username,password` format. Remove
+   the database tool and its secret reference if you are only running the
+   examples below. To exercise the database tool, supply the credentials,
+   enable `localnet`, and provide a reachable MariaDB backend.
 
 ```powershell
 $env:METISA_PROBE_2 = "Retrieved from host's environment variables"
@@ -100,9 +100,10 @@ approval for that amount.
 Try `Look up product code "chair".` to exercise the product tool and its
 guardrails, or `How many company values do we have?` to query example handbook
 excerpts through the sample's in-memory MCP server. The sample also connects to
-the sandbox MCP sidecar when `mcp_server` is enabled. If you enable
-`otel_collector`, the collector writes traces to
-`.runs/<run-id>/.logs/telemetry/traces.jsonl`.
+the sandbox MCP sidecar when `mcp_server` is enabled. With Agent Memory enabled,
+the sample includes current memories in its model instructions, saves user
+messages as episodes, and demonstrates both tool-based memory writes and
+reflection after the run.
 
 Try these prompts with the [robot inspection skills](src/sample_agent/skills).
 
@@ -115,8 +116,11 @@ Both skills use the battery and motor-temperature tools. The race skill loads
 a reference with the race limits. The storage skill loads a checklist and, if
 both measurements pass, runs `storage_available.star` to check for a bay.
 The sample data gives Bolt passing race measurements and Alice passing storage
-measurements with a bay available. To print lifecycle events for model and tool
-calls, set `_PRINT_LIFECYCLE_EVENTS` in [the sample CLI](src/sample_agent/cli.py).
+measurements with a bay available. The sample saves its assembled instructions
+to `output/instructions.txt` and writes lifecycle events to
+`.logs/metisa/lifecycle.txt` in the run directory. With `otel_collector` enabled,
+look in `.logs/telemetry` for `traces.jsonl` and `friendly.txt`, a summary of
+model turns, tool calls, and any short reasons the model supplied for those calls.
 
 ## Use the harness from Python
 
@@ -141,7 +145,7 @@ async def main() -> None:
     result = await AgentHarness.run(
         agent,
         run_identifier="example-run",
-        input="What is an AI agent harness?",
+        prompt="What is an AI agent harness?",
     )
     print(result.final_output)
 
@@ -328,7 +332,7 @@ references for credentials rather than committing credential values in TOML.
 | `embeddings` | Indexes document chunks and searches for matching content using Qdrant. Requires `docling`; include `qdrant` for storage. |
 | `otel_collector` | Collects OpenTelemetry traces from configured components. |
 | `postgres` | Provides PostgreSQL with pgvector and initializes the agent memory schema. Database storage persists across runs. |
-| `agent_memory` | Provides authenticated HTTP operations for episodes and memories, scoped to the launching Windows user. Requires `postgres`; content screening also needs Prompt Guard. |
+| `agent_memory` | Provides authenticated HTTP operations for episodes and memories, scoped to the launching Windows user. Requires `postgres` and `mcp_server`. |
 
 Include the configuration tables and prerequisite capabilities needed by each
 service. Use the test agent specification as a reference for combinations of
@@ -364,16 +368,12 @@ API fields are not supported. It sanitizes supported request and response text
 and checks it for prompt injection indicators through Prompt Guard. It rejects
 flagged content and returns an error when classification is unavailable.
 
-The agent memory service stores episodes and memories in PostgreSQL, including
-supplied memory embeddings. It sanitizes and screens record content and derives
-the storage namespace from the authenticated Windows user SID. Its current API
-supports creating, retrieving, and deleting episodes, plus creating, retrieving,
-updating, and deleting memories. This storage is separate from the Qdrant-based
-document retrieval service.
-
-For agent memory, include `network`, `postgres`, and `agent_memory`, and enable
-MCP or the LLM broker with their required guard capabilities so that Prompt
-Guard is started. The validator does not enforce this complete combination.
+The agent memory service stores user-scoped episodes and memories in
+PostgreSQL. The authenticated API can create, retrieve, list, and delete both
+record types and replace memories. Embeddings are optional. Ordinary reads
+hide expired records and memories whose validity has ended. The diagnostic
+`GET /snapshot` route returns up to 20 recent rows per table as plain-text
+Markdown, including historical and expired rows still stored in the database.
 
 ### Remote Chromium
 
@@ -408,24 +408,34 @@ The sidecar serves an ASP.NET Core 8 application at
 URL directly or open it in remote Chromium when `playwright_chromium` is enabled.
 Use `[http_server].environs` to set environment variables for the web application.
 
-The [sidecar Dockerfile](src/metisa_sandbox/http_server_sidecar/dockerfile)
-copies the published application from `publish/` in its build context into
-`/app`. It starts `WebApp.dll` and checks `/hello` for readiness.
+Publish the application with the .NET 8 SDK before starting this sidecar.
+From the repository root, run the following command.
+
+```powershell
+dotnet publish .\src\metisa_sandbox\http_server_sidecar\WebApp\WebApp.csproj `
+    --configuration Release `
+    --output .\src\metisa_sandbox\http_server_sidecar\publish
+```
+
+The [sidecar manager](src/metisa_sandbox/http_server_sidecar/http_server_manager.py)
+mounts the published application at `/app`. The image starts `WebApp.dll` and
+checks `/hello` for readiness.
 
 ## Run the sandbox test agent
 
 [`test_agent`](src/test_agent) exercises the sandbox services, including
 network access, database queries, text guards, model requests, documents,
 retrieval, interactive input, agent memory, secrets, tracing, and remote browser
-automation. The checked-in configuration enables the HTTP Server and Playwright
-Chromium. The browser exercise saves `chromium.png` in the run output directory.
-If you enable interactive input, its exercise writes `answer.txt` there as well.
+automation. The checked-in configuration enables the internal network, MCP
+with Prompt Guard and Entity Guard, telemetry, PostgreSQL, and Agent Memory.
+If you enable Playwright Chromium, its exercise saves `chromium.png` in the run
+output directory. The interactive exercise writes `answer.txt` there when enabled.
 
 1. Review [its TOML file](src/test_agent/metisa.toml), especially the enabled
    capabilities, local paths, allowed destinations, and credentials.
-2. Set `local_models_directory` to your model directory. GGUF files must already
-   exist under `<directory>/<repo>/<revision>/<filename>`, matching each entry
-   in `[llm_server].models`. The application does not download these files.
+2. Set `local_models_directory` to your model directory. If you enable
+   `llm_server`, provide the GGUF files under
+   `<directory>/<repo>/<revision>/<filename>`, matching `[llm_server].models`.
 3. Provide Prompt Guard model directories beneath the same model directory:
 
    ```text
@@ -443,18 +453,17 @@ If you enable interactive input, its exercise writes `answer.txt` there as well.
    $env:METISA_PROBE_2 = "Retrieved from host's environment variables"
    ```
 
-   Set `OPENAI_API_KEY` for the broker, `SANDBOX_TESTER_MARIADB_CREDENTIALS`
-   for the MCP database tool, and `METISA_POSTGRES_PASSWORD` for PostgreSQL and
-   agent memory. The MariaDB credential format is `username,password`. Use the
-   password that initialized the volume when reusing an existing PostgreSQL
-   volume.
-5. Provide the MariaDB service configured through HAProxy, or remove the
-   corresponding integration capability and configuration. The sample routes
-   port 3306 to `host.docker.internal`.
-6. Create and populate the configured document directory, currently `.docs`,
-   with the files referenced by the document, Docling, and embeddings exercises
-   in [the test suite](src/test_agent/test_suite). The checkout expects you to
-   supply these files.
+   Set `METISA_POSTGRES_PASSWORD` for the checked-in configuration. Use the
+   password that initialized the volume when reusing it. Set
+   `SANDBOX_TESTER_MARIADB_CREDENTIALS` in `username,password` format or remove
+   the database tool and its secret reference from `[mcp_server]`. Set
+   `OPENAI_API_KEY` if you enable the configured LLM broker.
+5. If you enable the MariaDB exercise via `localnet`, provide the backend
+   configured through HAProxy. The test configuration routes port 3306 to
+   `host.docker.internal`.
+6. If you enable the document, Docling, or embeddings exercises, populate the
+   configured document directory, currently `.docs`, with the files referenced
+   by [the test suite](src/test_agent/test_suite).
 
 Launch the test agent from the repository root.
 
@@ -538,7 +547,7 @@ The implementation combines several controls:
   Windows user, sandbox run, and intended service; services verify the signature,
   audience, run, and expiry.
 - Content sanitization and prompt injection screening for MCP results, supported
-  LLM broker text, and agent memory records.
+  LLM broker text, and ordinary agent memory reads and writes.
 
 The host provisions `METISA_MCP_SERVER_TOKEN` and `METISA_AGENT_MEMORY_TOKEN`
 as workload secrets when their respective services are enabled. The shared MCP
@@ -569,7 +578,7 @@ files, and scratch storage, while keeping output and collected logs. Cleanup
 also runs when setup or execution raises an error. Docker images remain cached
 for reuse.
 
-PostgreSQL data is retained in the Docker volume `metisa-agent-memory`,
+PostgreSQL data is retained in the Docker volume `metisa-postgress-agent-memory`,
 independently of per-run output and logs. Normal cleanup removes the PostgreSQL
 container but preserves this volume. PostgreSQL uses the fixed container name
 `metisa-postgres-agent-memory`, so runs using it cannot execute concurrently.
